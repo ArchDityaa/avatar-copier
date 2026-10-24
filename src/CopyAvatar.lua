@@ -1,5 +1,5 @@
 --[[
-    Avatar Copier — v1.0.0
+    Avatar Copier — v1.0.1
     ----------------------
     A fully client-side Roblox avatar copier for Delta Executor.
 
@@ -23,7 +23,7 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.0.0",
+    VERSION = "1.0.1",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
     COPY_COOLDOWN = 1.5, -- seconds; keeps the avatar API from rate-limiting you
@@ -118,31 +118,139 @@ local function track(connection)
     return connection
 end
 
-local function getGuiParent()
-    if type(gethui) == "function" then
-        local ok, container = pcall(gethui)
-        if ok and container then
-            return container
-        end
+local function getPlayerGui()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        return playerGui
     end
+
+    local ok, result = pcall(function()
+        return LocalPlayer:WaitForChild("PlayerGui", 5)
+    end)
+    if ok then
+        return result
+    end
+
+    return nil
+end
+
+local function candidateParents()
+    local candidates = {}
+    local seen = {}
+
+    local function add(name, instance)
+        if type(typeof) == "function" and typeof(instance) ~= "Instance" then
+            return
+        end
+        if not instance or seen[instance] then
+            return
+        end
+
+        seen[instance] = true
+        table.insert(candidates, { name = name, instance = instance })
+    end
+
+    local playerGui = getPlayerGui()
 
     local ok, coreGui = pcall(function()
         return game:GetService("CoreGui")
     end)
-    if ok and coreGui then
-        return coreGui
+    if not ok then
+        coreGui = nil
     end
 
-    return LocalPlayer:WaitForChild("PlayerGui")
+    local hui = nil
+    if type(gethui) == "function" then
+        local huiOk, container = pcall(gethui)
+        if huiOk then
+            hui = container
+        end
+    end
+
+    local override = nil
+    if type(getgenv) == "function" then
+        local env = getgenv()
+        if type(env) == "table" then
+            override = env.AVATAR_COPIER_PARENT
+        end
+    end
+
+    -- Some mobile executors hide gethui containers; PlayerGui is the safer default there.
+    local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+
+    local order
+    if isMobile then
+        order = { "PlayerGui", "gethui", "CoreGui" }
+    else
+        order = { "gethui", "CoreGui", "PlayerGui" }
+    end
+
+    if type(override) == "string" then
+        local normalized = string.lower(override)
+        local reordered = { normalized }
+        for _, name in ipairs(order) do
+            if string.lower(name) ~= normalized then
+                table.insert(reordered, string.lower(name))
+            end
+        end
+        order = reordered
+    end
+
+    local byName = {
+        playergui = playerGui,
+        coregui = coreGui,
+        gethui = hui,
+    }
+
+    for _, key in ipairs(order) do
+        add(key, byName[string.lower(key)])
+    end
+
+    return candidates
+end
+
+local function attachGui(gui)
+    local failures = {}
+
+    for _, candidate in ipairs(candidateParents()) do
+        gui.Parent = nil
+
+        local ok, err = pcall(function()
+            gui.Parent = candidate.instance
+        end)
+
+        if ok and gui.Parent == candidate.instance and gui:IsDescendantOf(game) then
+            return candidate.name
+        end
+
+        table.insert(
+            failures,
+            ("%s: %s"):format(candidate.name, tostring(err or "rejected or detached"))
+        )
+    end
+
+    if #failures == 0 then
+        return nil, "no candidate parents available"
+    end
+
+    return nil, table.concat(failures, "; ")
+end
+
+local function removePreviousGuis()
+    for _, candidate in ipairs(candidateParents()) do
+        local ok, previous = pcall(function()
+            return candidate.instance:FindFirstChild("AvatarCopierGui")
+        end)
+        if ok and previous then
+            pcall(function()
+                previous:Destroy()
+            end)
+        end
+    end
 end
 
 local function buildInterface()
-    local parent = getGuiParent()
-
-    local previous = parent:FindFirstChild("AvatarCopierGui")
-    if previous then
-        previous:Destroy()
-    end
+    removePreviousGuis()
 
     screenGui = Instance.new("ScreenGui")
     screenGui.Name = "AvatarCopierGui"
@@ -150,6 +258,19 @@ local function buildInterface()
     screenGui.ResetOnSpawn = false
     screenGui.DisplayOrder = 9999
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Enabled = true
+
+    local parentName, parentError = attachGui(screenGui)
+    if not parentName then
+        warn(("%s Could not attach the GUI (%s)."):format(LOG_PREFIX, tostring(parentError)))
+        if screenGui then
+            screenGui:Destroy()
+            screenGui = nil
+        end
+        return nil
+    end
+
+    print(("%s GUI attached to %s."):format(LOG_PREFIX, parentName))
 
     local window = Instance.new("Frame")
     window.Name = "Window"
@@ -157,6 +278,7 @@ local function buildInterface()
     window.Position = CONFIG.START_POSITION
     window.BackgroundColor3 = COLORS.background
     window.BorderSizePixel = 0
+    window.Parent = screenGui
 
     makeCorner(window, 12)
 
@@ -284,8 +406,6 @@ local function buildInterface()
         10
     )
     footer.TextTransparency = 0.25
-
-    screenGui.Parent = parent
 
     -- dragging -------------------------------------------------------
 
@@ -643,7 +763,15 @@ end
 
 -- ------------------------------------------------------------- startup
 
-local destroyInterface = buildInterface()
+local buildOk, buildResult = pcall(buildInterface)
+if not buildOk then
+    return warn(("%s Startup failed: %s"):format(LOG_PREFIX, tostring(buildResult)))
+end
+
+local destroyInterface = buildResult
+if destroyInterface == nil then
+    return
+end
 
 track(copyButton.MouseButton1Click:Connect(function()
     task.spawn(function()

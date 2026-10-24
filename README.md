@@ -28,7 +28,7 @@ Because character appearance changes made from the client are never replicated t
 ## Requirements
 
 - Roblox client (PC, or any platform where Delta runs)
-- [Delta Executor](https://deltaexploit.com/) or any executor that supports `gethui` and `game:HttpGet`
+- [Delta Executor](https://deltaexploit.com/) or any executor with `game:HttpGet` (`gethui` is optional — see [Troubleshooting](#troubleshooting))
 - An R15 avatar is recommended (most modern games); see [Limitations](#limitations)
 
 ---
@@ -45,6 +45,12 @@ Because character appearance changes made from the client are never replicated t
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ArchDityaa/avatar-copier/main/src/CopyAvatar.lua"))()
+```
+
+If `raw.githubusercontent.com` is slow or blocked, use the jsDelivr mirror:
+
+```lua
+loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/ArchDityaa/avatar-copier@main/src/CopyAvatar.lua"))()
 ```
 
 ---
@@ -65,7 +71,7 @@ The script exposes a small API through `getgenv()`:
 AvatarCopier.copy("Roblox")    -- copy by username / ID / URL
 AvatarCopier.reset()           -- restore your original look
 AvatarCopier.destroy()         -- close the window
-AvatarCopier.version           -- "1.0.0"
+AvatarCopier.version           -- "1.0.1"
 ```
 
 ---
@@ -100,7 +106,8 @@ Only `Players`, `UserInputService`, and `TweenService` are used. There is no HTT
 
 | Problem | Fix |
 | --- | --- |
-| Window does not appear | Re-attach the executor and execute again; some games unload GUIs on teleport. |
+| Window does not appear | Check the console: it should print `[Avatar Copier] GUI attached to <parent>`. If it says `Could not attach the GUI`, pin a container before running: `getgenv().AVATAR_COPIER_PARENT = "PlayerGui"` (or `"CoreGui"` / `"gethui"`). |
+| Window appears but is empty | That was a v1.0.0 bug (the panel was never parented to the ScreenGui). Rerun the loadstring above to get v1.0.1. |
 | `Player not found` | Check the exact spelling, or use the numeric user ID / profile URL. |
 | `Could not load that avatar` | Usually a rate limit or a private avatar. Wait a few seconds and retry. |
 | `Failed to apply` | The game's avatar setup may be incompatible (e.g. custom character). Try another avatar or rejoin. |
