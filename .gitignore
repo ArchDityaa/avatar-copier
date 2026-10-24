@@ -20,3 +20,6 @@ desktop.ini
 # Local environment
 .env
 .env.*
+
+# Test build output
+build/

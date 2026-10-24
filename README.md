@@ -102,6 +102,40 @@ Only `Players`, `UserInputService`, and `TweenService` are used. There is no HTT
 
 ---
 
+## Development
+
+The script is tested headlessly with open-source tooling — no Roblox client required.
+
+| Tool | Purpose |
+| --- | --- |
+| [Luau](https://github.com/luau-lang/luau) | Official Roblox Lua compiler/runtime. Compiles the script and executes the mock harness. |
+| [Selene](https://github.com/Kampfkarren/selene) | Static analysis against the Roblox standard library plus the executor globals. |
+
+```bash
+./tests/run.sh
+```
+
+`tests/mock_roblox.luau` implements only the Roblox API surface this script uses (instances, signals, services, `HumanoidDescription`, `gethui`). `tests/spec.luau` then asserts the behaviour that matters:
+
+- the window is parented to the `ScreenGui` (the v1.0.0 regression),
+- mobile attaches to `PlayerGui`, desktop prefers `gethui`,
+- the in-server fast path and the username API path,
+- cooldown, unknown user, empty input, reset, and cleanup,
+- no warnings on the happy path.
+
+The suite runs twice, with a mobile and a desktop profile. CI runs the same script on every push.
+
+Point the runner at locally installed binaries if they are not on `PATH`:
+
+```bash
+LUAU=/path/to/luau \
+LUAU_COMPILE=/path/to/luau-compile \
+SELENE=/path/to/selene \
+./tests/run.sh
+```
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |

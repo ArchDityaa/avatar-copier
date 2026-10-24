@@ -1,0 +1,31 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Luau
+        run: |
+          curl -sL -o "$RUNNER_TEMP/luau.zip" \
+            https://github.com/luau-lang/luau/releases/download/0.744/luau-ubuntu.zip
+          unzip -q "$RUNNER_TEMP/luau.zip" -d "$HOME/.luau"
+          chmod +x "$HOME/.luau/luau" "$HOME/.luau/luau-compile"
+          echo "$HOME/.luau" >> "$GITHUB_PATH"
+
+      - name: Install Selene
+        run: |
+          curl -sL -o "$RUNNER_TEMP/selene.zip" \
+            https://github.com/Kampfkarren/selene/releases/download/0.32.0/selene-0.32.0-linux.zip
+          unzip -q "$RUNNER_TEMP/selene.zip" -d "$HOME/.selene"
+          chmod +x "$HOME/.selene/selene"
+          echo "$HOME/.selene" >> "$GITHUB_PATH"
+
+      - name: Run tests
+        run: ./tests/run.sh

@@ -1,0 +1,4 @@
+std = "roblox+executor"
+
+[lints]
+unscoped_variables = "allow"

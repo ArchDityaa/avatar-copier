@@ -1,0 +1,6 @@
+---
+globals:
+  getgenv:
+    args: []
+  gethui:
+    args: []
