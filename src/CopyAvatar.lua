@@ -202,8 +202,15 @@ local function candidateParents()
         gethui = hui,
     }
 
+    local displayNames = {
+        playergui = "PlayerGui",
+        coregui = "CoreGui",
+        gethui = "gethui",
+    }
+
     for _, key in ipairs(order) do
-        add(key, byName[string.lower(key)])
+        local normalized = string.lower(key)
+        add(displayNames[normalized] or key, byName[normalized])
     end
 
     return candidates
@@ -647,9 +654,11 @@ local function copyAvatar(rawTarget)
         return false, "Interface is closed."
     end
     if busy then
+        setStatus("A copy is already in progress.", COLORS.warning)
         return false, "A copy is already in progress."
     end
     if os.clock() - lastCopyAt < CONFIG.COPY_COOLDOWN then
+        setStatus("Please wait a moment before trying again.", COLORS.warning)
         return false, "Please wait a moment before trying again."
     end
 
