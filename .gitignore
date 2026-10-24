@@ -1,0 +1,22 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Executor / script artifacts
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.place
+*.log
+
+# Local environment
+.env
+.env.*
