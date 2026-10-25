@@ -4,6 +4,35 @@ All notable changes to Avatar Copier are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.6.0 — 2026-10-25
+
+### Reworked
+
+- **The preview is now an anchored puppet that copies part positions
+  directly.** Every preview part is anchored, and every frame the follow loop
+  copies the CFrame of the matching part of your real character. The preview
+  therefore reproduces your exact pose — walking, jumping, sitting, swimming,
+  emotes — with no Animator, no second physics rig, and no cross-rig copying.
+- `sanitizeOverlay` strips every `JointInstance` (`Motor6D`, `Weld`,
+  `WeldConstraint`, `AccessoryWeld`, …), so no leftover joint solve can fight
+  the puppet or the local physics.
+- Pairing is by part name/class (accessory handles pair through their
+  accessory), with an ordered fallback pass for non-standard rigs.
+
+### Fixed
+
+- The v1.5.0 Animator-track sync scrubbed `TimePosition` every frame, which
+  made previews stutter, drift, or appear to fly while walking. Direct CFrame
+  copying removes that failure mode entirely.
+
+### Changed
+
+- Version bumped to `1.6.0`.
+- Headless tests grew from `150` to `151` checks per profile (mobile and
+  desktop): the Animator suite was replaced by puppet assertions (no joints,
+  no animation machinery, all parts anchored, part CFrames mirrored, and the
+  follow loop re-hides the real character after a camera zoom).
+
 ## 1.5.0 — 2026-10-25
 
 ### Reworked

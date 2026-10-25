@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Versi](https://img.shields.io/badge/version-1.5.0-6366f1)
+![Versi](https://img.shields.io/badge/version-1.6.0-6366f1)
 ![Test](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![Lisensi](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -27,7 +27,7 @@ Roblox tidak mereplikasi model buatan client, jadi **hanya Anda yang melihat pra
 | Copy lewat user ID | Contoh: `1` |
 | Copy lewat URL profil | Contoh: `https://www.roblox.com/users/1/profile` |
 | Fast path dalam server | Meng-clone karakter live target jika ia ada di server yang sama untuk hasil paling akurat |
-| Pratinjau overlay lokal | Rig pratinjau ber-anchored mengikuti posisi Anda (tanpa weld, tanpa gangguan fisika) dan memainkan **animasi Anda sendiri** lewat `Animator` baru — bukan animasi target |
+| Pratinjau overlay lokal | Rig pratinjau berupa puppet ber-anchored: setiap part menyalin posisi part karakter asli Anda tiap frame — tanpa weld, tanpa joint, tanpa gangguan fisika, dan tidak pernah animasi target |
 | Kontrol window | Minimize mengecil ke title bar; close menyembunyikan GUI sementara pratinjau tetap aktif, pill melayang membukanya kembali |
 | Beberapa fallback build | API description → API user ID → clone rig lokal → salin sebagian penampilan |
 | Tombol Reset | Menghapus overlay dan menampilkan kembali karakter asli |
@@ -79,7 +79,7 @@ Rig pratinjau dibuat sepenuhnya di client Anda. Script tidak pernah memanggil `A
 | Clipboard error | Didukung | Memakai `setclipboard`, `toclipboard`, atau `writeclipboard`; fallback ke console |
 | PC | Didukung | Desktop memakai urutan `gethui` → `CoreGui` → `PlayerGui` |
 | Mobile | Didukung | Memprioritaskan `PlayerGui`, lebih andal di executor mobile |
-| Avatar R15 | Terbaik | Dukungan description/model penuh dan mirror animation track |
+| Avatar R15 | Terbaik | Dukungan description/model penuh; setiap bagian tubuh dimirror frame demi frame |
 | Avatar R6 | Sebagian | Fallback lokal dapat menyalin warna tubuh dan pakaian; sendi R6/R15 hanya cocok sebagian |
 | Game dengan sistem avatar custom | Sebagian | Rig lokal mungkin tidak mereproduksi tubuh khusus game; target dalam server di-clone jika memungkinkan |
 | API asset executor | Bervariasi | Jika API model/asset Roblox diblokir, script beralih ke clone rig client-only |
@@ -92,7 +92,7 @@ Rig pratinjau dibuat sepenuhnya di client Anda. Script tidak pernah memanggil `A
 4. Tunggu status card: `Previewing <nama> (local only)`.
 5. Tekan **Reset** untuk menghapus pratinjau dan menampilkan kembali avatar Anda, atau tutup jendela dengan `×`.
 
-Overlay mengikuti posisi Anda setiap frame dan memainkan **animasi Anda sendiri** lewat `Animator`-nya sendiri. Script tidak pernah menjalankan mekanisme animasi milik target, dan overlay hanya ada di client Anda.
+Overlay adalah **puppet ber-anchored**: setiap part menyalin CFrame-nya dari karakter Anda tiap frame, sehingga pose dan animasi Anda direproduksi persis. Script tidak pernah menjalankan mekanisme animasi milik target, dan overlay hanya ada di client Anda.
 
 | Aksi | Input |
 | --- | --- |
@@ -110,7 +110,7 @@ AvatarCopier.copy("Roblox")    -- copy lewat username / ID / URL
 AvatarCopier.copy(1)           -- user ID numerik
 AvatarCopier.reset()           -- hapus pratinjau
 AvatarCopier.destroy()         -- tutup jendela
-print(AvatarCopier.version)    -- "1.5.0"
+print(AvatarCopier.version)    -- "1.6.0"
 print(AvatarCopier.isPreviewing())
 print(AvatarCopier.getTarget())
 ```
@@ -122,7 +122,7 @@ print(AvatarCopier.getTarget())
 | `AvatarCopier.destroy()` | Menghapus GUI dan overlay, lalu membersihkan API global. |
 | `AvatarCopier.isPreviewing()` | Mengembalikan `true` saat overlay pratinjau aktif. |
 | `AvatarCopier.getTarget()` | Mengembalikan `{ name, userId, source }` untuk pratinjau aktif, atau `nil`. |
-| `AvatarCopier.version` | String versi saat ini (`"1.5.0"`). |
+| `AvatarCopier.version` | String versi saat ini (`"1.6.0"`). |
 
 `copy` dan `reset` bersifat fire-and-forget: keduanya menjalankan task lalu langsung kembali. Baca status card untuk hasilnya.
 
@@ -131,7 +131,7 @@ print(AvatarCopier.getTarget())
 Jika terjadi error Luau tak terduga — saat startup, di handler tombol, pipeline copy/reset, atau pemanggilan API — Avatar Copier menangkapnya dan menyusun laporan ringkas:
 
 ```text
-Avatar Copier v1.5.0 - error report
+Avatar Copier v1.6.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy button
 Error: <pesan error>
@@ -142,7 +142,7 @@ Traceback:
 Kegagalan yang ditangani juga menghasilkan laporan. Jika semua metode build pratinjau gagal, laporan memuat target, user ID hasil resolve, sumber avatar, setiap metode yang dicoba, dan error-nya:
 
 ```text
-Avatar Copier v1.5.0 - error report
+Avatar Copier v1.6.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy/build
 Target: Roblox
@@ -175,7 +175,7 @@ flowchart TD
     F --> I
     G --> I
     H --> I
-    I --> J[Anchor + ikuti rig Anda dan mainkan animasi Anda]
+    I --> J[Anchor setiap part dan salin pose rig Anda]
     J --> K[Sembunyikan karakter asli secara lokal]
     K --> L[Hanya terlihat di client Anda]
 ```
@@ -192,8 +192,8 @@ flowchart TD
 3. **Attach dan ikuti**
    - Model disanitasi (tanpa script, collision, touch, constraint mover, atau raycast), dan di-parent ke `workspace.AvatarCopierOverlay`.
    - Root part-nya **di-anchored**: tidak ada weld ke rig Anda, jadi pratinjau tidak mungkin menyuntikkan impuls ke Humanoid Anda (tidak ada lompat otomatis saat berjalan).
-   - Setiap `RenderStepped`, root yang di-anchored mengikuti `HumanoidRootPart` Anda, `AnimationTrack` milik Anda diputar ulang di `Animator` baru milik pratinjau (asset, speed, weight, time position yang sama), dan status tersembunyi karakter asli diterapkan ulang supaya zoom kamera tidak membatalkannya.
-   - `Animator` dan mekanisme animasi milik target dihancurkan saat sanitasi, jadi pratinjau tidak mungkin memainkan animasi target.
+   - Setiap `RenderStepped`, setiap part pratinjau menyalin CFrame dari part yang cocok di karakter asli Anda (pose direproduksi persis, tanpa Animator dan tanpa joint), dan status tersembunyi karakter asli diterapkan ulang supaya zoom kamera tidak membatalkannya.
+   - `Animator`, joint, dan seluruh mekanisme animasi milik target dihancurkan saat sanitasi, jadi pratinjau tidak mungkin memainkan animasi target.
    - Karakter asli disembunyikan secara lokal dengan `LocalTransparencyModifier` dan properti client-only terkait. `Transparency` yang direplikasi tidak diubah.
 4. **Kembalikan**
    - **Reset** menghentikan loop follow, menghancurkan overlay, dan mengembalikan semua properti yang disembunyikan. Karakter asli tidak pernah diubah di server.
@@ -219,8 +219,8 @@ flowchart TD
 - **Avatar privat / dimoderasi** — Roblox dapat menolak mengembalikan description atau membangun model; status card melaporkan kegagalan dan menyalin detailnya.
 - **API asset executor** — sebagian executor memblokir `CreateHumanoidModelFromDescriptionAsync` atau `CreateHumanoidModelFromUserIdAsync`; fallback clone lokal membuat fitur tetap bisa dipakai, meski fidelity bisa lebih rendah.
 - **Rate limit** — pencarian berulang dapat dibatasi Roblox. Script menerapkan cooldown 1,5 detik antar percobaan; jika tetap terkena limit, tunggu beberapa detik.
-- **Respawn / rejoin** — pratinjau dipasang ulang otomatis di karakter baru Anda (v1.5.0). Reset manual mengakhiri pratinjau sekaligus mematikan re-apply otomatis.
-- **Animasi** — pratinjau memakai `Animator` baru dan memirror track yang **Anda mainkan sendiri** (jalan, lari, emote). Animasi target tidak pernah disalin. Jika keluarga rig target berbeda dari Anda (R6 vs R15), pratinjau tetap pose-netral alih-alih menebak-nebak.
+- **Respawn / rejoin** — pratinjau dipasang ulang otomatis di karakter baru Anda (v1.6.0). Reset manual mengakhiri pratinjau sekaligus mematikan re-apply otomatis.
+- **Animasi** — pratinjau adalah puppet ber-anchored: setiap part menyalin posisi karakter Anda tiap frame, jadi animasi Anda otomatis mengikuti. Animasi target tidak pernah disalin. Rig non-standar memakai pasangan part berurutan, jadi pratinjau tetap bergerak.
 - **Tampilan pemain lain** — secara desain mereka tidak pernah melihat pratinjau. Ini pratinjau pribadi, bukan penyamaran.
 - **Override khusus game** — sebagian game memaksa animation pack, aturan aksesori, atau sistem karakter sendiri setelah spawn.
 
@@ -234,7 +234,7 @@ flowchart TD
 | `Could not load that avatar` | Biasanya rate limit atau avatar privat. Tunggu beberapa detik lalu coba lagi. |
 | `Preview failed` | Executor mungkin memblokir API avatar/model, atau avatar privat. Status seharusnya menyebut detail disalin ke clipboard; tempel laporan itu saat meminta bantuan. |
 | Karakter tidak berubah | Pastikan karakter sudah termuat sepenuhnya, lalu coba lagi. Di game R6 atau executor yang membatasi API, hasilnya bisa sebagian. |
-| Pratinjau hilang setelah respawn | Sejak v1.5.0 pratinjau dipasang ulang otomatis. Jika target tidak bisa di-resolve lagi (keluar server, avatar privat), status card menjelaskan alasannya — copy avatar lagi. |
+| Pratinjau hilang setelah respawn | Sejak v1.6.0 pratinjau dipasang ulang otomatis. Jika target tidak bisa di-resolve lagi (keluar server, avatar privat), status card menjelaskan alasannya — copy avatar lagi. |
 | Reset tidak menghapus pratinjau | Tekan **Reset** sekali lagi, atau tekan `×` di title bar lalu jalankan ulang script. `AvatarCopier.reset()` juga tersedia. |
 | Karakter asli tetap tidak terlihat | Reset/destroy harus mengembalikannya. Jika script terhenti, jalankan ulang; eksekusi berikutnya memulihkan visibilitas lokal dan menghapus overlay yang tersisa. |
 | Script crash / muncul error merah | Tempel isi clipboard ke laporan bug. Isinya harus memuat versi Avatar Copier, context, pesan error, dan traceback. Jika clipboard kosong, salin output console. |
@@ -257,10 +257,10 @@ Tidak. Tidak ada key system dan tidak ada autentikasi eksternal.
 Script ini tidak menyentuh state server atau mengirim data ke mana pun, tetapi penggunaan executor pihak ketiga tetap berisiko menurut Ketentuan Penggunaan Roblox. Gunakan dengan risiko sendiri — lihat [DISCLAIMER.md](DISCLAIMER.md).
 
 **Kenapa pratinjau hilang saat respawn?**
-Pratinjau tidak hilang lagi: pratinjau dipasang ulang otomatis di karakter baru Anda (v1.5.0). Jika gagal — target keluar server atau avatar privat — status card menjelaskannya dan Anda bisa copy lagi.
+Pratinjau tidak hilang lagi: pratinjau dipasang ulang otomatis di karakter baru Anda (v1.6.0). Jika gagal — target keluar server atau avatar privat — status card menjelaskannya dan Anda bisa copy lagi.
 
 **Apakah animasi ikut tersalin?**
-Overlay: `Animator` baru milik pratinjau memutar ulang track yang **Anda mainkan sendiri** (jalan, lari, emote), jadi mengikuti animasi Anda sendiri. Animasi target atau animation pack-nya tidak pernah dijalankan; sebagian game juga memaksa animation set sendiri.
+Pratinjau menyalin posisi setiap part dari rig Anda tiap frame, jadi mengikuti animasi Anda persis (puppet ber-anchored). Animasi target atau animation pack-nya tidak pernah dijalankan; sebagian game juga memaksa animation set sendiri.
 
 **Bisakah copy pemain yang tidak ada di server?**
 Bisa, lewat username atau user ID, selama tidak terkena rate limit Roblox dan avatar tidak privat.
@@ -288,7 +288,7 @@ Script diuji secara headless dengan tooling open source — tanpa perlu client R
 - jalur clone dalam server dan jalur API username,
 - overlay lokal dibuat, di-anchored, diikuti tiap frame, disanitasi, dan status karakter tersembunyi dipulihkan,
 - Humanoid LocalPlayer asli tidak pernah diberikan ke `ApplyDescription`,
-- `Animator` baru di pratinjau yang memirror AnimationTrack milik Anda sendiri dan tidak pernah milik target,
+- pratinjau adalah puppet ber-anchored: joint dan mekanisme animasi disingkirkan, semua part di-anchor, dan CFrame part dimirror dari rig asli (termasuk re-hide setelah zoom kamera),
 - rantai fallback description/API serta clone lokal/sebagian,
 - kegagalan build yang ditangani menulis laporan diagnostik ke clipboard,
 - error tak terduga menyertakan context dan traceback,
@@ -296,7 +296,7 @@ Script diuji secara headless dengan tooling open source — tanpa perlu client R
 - cooldown, user tidak dikenal, input kosong, reset, re-apply otomatis setelah respawn (dan pembatalannya setelah Reset), serta cleanup destroy,
 - tidak ada warning pada jalur pratinjau sukses dan validasi.
 
-Suite saat ini menjalankan `150` check per profil (mobile dan desktop).
+Suite saat ini menjalankan `151` check per profil (mobile dan desktop).
 
 Suite dijalankan dua kali, dengan profil mobile dan desktop. CI menjalankan script yang sama pada setiap push.
 
@@ -325,7 +325,8 @@ docs/preview.svg        Pratinjau UI untuk README
 - [x] Laporan error otomatis ke clipboard lengkap dengan traceback (`1.2.0`)
 - [x] Pratinjau overlay client-only yang tidak lagi memanggil `ApplyDescription` pada Humanoid asli (`1.3.0`)
 - [x] Pratinjau anchored bebas auto-jump, tombol minimize, close non-destruktif dengan pill melayang (`1.4.0`)
-- [x] Pemutaran animasi sendiri via `Animator` baru (animasi target dihapus) dan re-apply otomatis setelah respawn (`1.5.0`)
+- [x] Pemutaran animasi sendiri dengan mesin animasi target dihapus, plus re-apply otomatis setelah respawn (`1.5.0`)
+- [x] Puppet ber-anchored penyalinan posisi part untuk gerakan tanpa glitch (`1.6.0`)
 - [x] Dokumentasi bahasa Inggris dan Indonesia
 - [ ] Riwayat copy dan favorit
 - [ ] Copy sebagian (pakaian saja, aksesori saja, animasi saja)

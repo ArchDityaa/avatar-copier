@@ -178,6 +178,9 @@ local CLASS_PARENTS = {
     Animation = "Instance",
     AnimationTrack = "Instance",
     Animator = "Instance",
+    Motor6D = "JointInstance",
+    Weld = "JointInstance",
+    JointInstance = "Instance",
 }
 
 function METHODS:IsA(className)
@@ -542,7 +545,8 @@ local function makeRig(name, description, backendOwned, includeGhost)
     if includeGhost ~= false then
         -- A looping animation that stands in for whatever animations a live
         -- target's Animator might carry. A clean preview must NOT inherit it:
-        -- sanitizeOverlay removes it and attachOverlay builds a fresh Animator.
+        -- sanitizeOverlay removes every animation asset, track, Animator, and
+        -- joint before the preview is attached.
         local ghostAnimation = newInstance("Animation")
         ghostAnimation.Name = "GhostAnimation"
         ghostAnimation.AnimationId = "rbxassetid://9001"

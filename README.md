@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Version](https://img.shields.io/badge/version-1.5.0-6366f1)
+![Version](https://img.shields.io/badge/version-1.6.0-6366f1)
 ![Tests](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -27,7 +27,7 @@ Roblox does not replicate client-created models, so **only you see the preview**
 | Copy by user ID | e.g. `1` |
 | Copy by profile URL | e.g. `https://www.roblox.com/users/1/profile` |
 | In-server fast path | Clones the target's live character when they are in the same server for the highest fidelity |
-| Local overlay preview | Anchored preview rig follows your position (no welds, no physics interference) and plays **your own** animations on a fresh `Animator` — never the target's |
+| Local overlay preview | Anchored puppet rig: every part copies its position from your real character every frame — no welds, no joints, no physics interference, and never the target's animations |
 | Window controls | Minimize collapses to the title bar; close hides the GUI while the preview stays, a floating pill reopens it |
 | Multiple build fallbacks | Description API → user-ID API → local-rig clone → partial appearance copy |
 | Reset button | Removes the overlay and reveals your real character again |
@@ -79,7 +79,7 @@ The preview rig is created entirely on your client. The script never calls `Appl
 | Error clipboard | Supported | Uses `setclipboard`, `toclipboard`, or `writeclipboard`; falls back to the console |
 | PC | Supported | Desktop attaches to `gethui` → `CoreGui` → `PlayerGui` |
 | Mobile | Supported | Attaches to `PlayerGui` first, where mobile executors are more reliable |
-| R15 avatars | Best | Full description/model support and animation-track mirroring |
+| R15 avatars | Best | Full description/model support; every body part is mirrored frame-by-frame |
 | R6 avatars | Partial | The local fallback can copy body colours and clothing; R6/R15 joints only partially match |
 | Custom avatar games | Partial | A local rig may not reproduce game-specific bodies; in-server targets are cloned when possible |
 | Executor asset APIs | Varies | If Roblox asset/model APIs are blocked, the script falls back to cloning your client-only rig |
@@ -92,7 +92,7 @@ The preview rig is created entirely on your client. The script never calls `Appl
 4. Wait for the status card: `Previewing <name> (local only)`.
 5. Press **Reset** to remove the preview and reveal your own avatar, or close the window with `×`.
 
-The overlay follows your position every frame and plays **your own animations** through its own `Animator`. It never runs the target's animation machinery, and it exists only on your client.
+The overlay is an **anchored puppet**: every part copies its CFrame from your character each frame, so your pose and animations are reproduced exactly. It never runs the target's animation machinery, and it exists only on your client.
 
 | Action | Input |
 | --- | --- |
@@ -110,7 +110,7 @@ AvatarCopier.copy("Roblox")    -- copy by username / ID / URL
 AvatarCopier.copy(1)           -- numeric user ID
 AvatarCopier.reset()           -- remove the preview
 AvatarCopier.destroy()         -- close the window
-print(AvatarCopier.version)    -- "1.5.0"
+print(AvatarCopier.version)    -- "1.6.0"
 print(AvatarCopier.isPreviewing())
 print(AvatarCopier.getTarget())
 ```
@@ -122,7 +122,7 @@ print(AvatarCopier.getTarget())
 | `AvatarCopier.destroy()` | Removes the GUI and overlay, then clears the global API. |
 | `AvatarCopier.isPreviewing()` | Returns `true` while a preview overlay is active. |
 | `AvatarCopier.getTarget()` | Returns `{ name, userId, source }` for the active preview, or `nil`. |
-| `AvatarCopier.version` | Current version string (`"1.5.0"`). |
+| `AvatarCopier.version` | Current version string (`"1.6.0"`). |
 
 `copy` and `reset` are fire-and-forget: they spawn a task and return immediately. Read the status card for the result.
 
@@ -131,7 +131,7 @@ print(AvatarCopier.getTarget())
 If an unexpected Luau error happens — during startup, a button handler, the copy/reset pipeline, or an API call — Avatar Copier catches it and builds a compact report:
 
 ```text
-Avatar Copier v1.5.0 - error report
+Avatar Copier v1.6.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy button
 Error: <error message>
@@ -142,7 +142,7 @@ Traceback:
 Handled failures also produce a report. If every preview-build method fails, the report includes the target, resolved user ID, avatar source, each attempted method, and its error:
 
 ```text
-Avatar Copier v1.5.0 - error report
+Avatar Copier v1.6.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy/build
 Target: Roblox
@@ -175,7 +175,7 @@ flowchart TD
     F --> I
     G --> I
     H --> I
-    I --> J[Anchor + follow your rig and play your animations]
+    I --> J[Anchor every part and copy your rig's poses]
     J --> K[Hide your real character locally]
     K --> L[Visible on your client only]
 ```
@@ -192,8 +192,8 @@ flowchart TD
 3. **Attach and follow**
    - The model is sanitized (no scripts, collisions, touches, constraint movers, or raycast hits) and parented under `workspace.AvatarCopierOverlay`.
    - Its root part is **anchored**: nothing is welded to your rig, so the preview can never inject impulses into your Humanoid (no auto-jumping while walking).
-   - Every `RenderStepped`, the anchored root follows your `HumanoidRootPart`, your own `AnimationTrack`s are replayed on the preview's fresh `Animator` (same asset, speed, weight, time position), and the hidden state of your real character is re-applied so camera zooms cannot undo it.
-   - The target's `Animator` and animation machinery are destroyed during sanitizing, so a preview can never run the target's animations.
+   - Every `RenderStepped`, each preview part copies the CFrame of its matching part on your real character (the pose is reproduced exactly, with no animators or joints), and the hidden state of your real character is re-applied so camera zooms cannot undo it.
+   - The target's `Animator`, joints, and any animation machinery are destroyed during sanitizing, so a preview can never run the target's animations.
    - Your real character is hidden locally with `LocalTransparencyModifier` and related client-only properties. Replicated `Transparency` is not changed.
 4. **Restore**
    - **Reset** stops the follow loop, destroys the overlay, and restores every hidden property. Your real character was never modified on the server.
@@ -219,8 +219,8 @@ flowchart TD
 - **Private / moderated avatars** — Roblox may refuse to return a description or build a model; the status card reports the failure and copies the details.
 - **Executor asset APIs** — some executors block `CreateHumanoidModelFromDescriptionAsync` or `CreateHumanoidModelFromUserIdAsync`; the local clone fallbacks keep the feature usable, though fidelity can be lower.
 - **Rate limits** — repeated lookups can be throttled by Roblox. The script enforces a 1.5-second cooldown between attempts; if you still get throttled, wait a few seconds.
-- **Respawn / rejoin** — the preview re-applies itself automatically on your new character (v1.5.0). A manual Reset ends the preview and also cancels the auto re-apply.
-- **Animations** — the preview runs a fresh `Animator` and mirrors **your own** playing tracks (walk, run, emotes). The target's animations are never copied. If the target's rig family differs from yours (R6 vs R15), the preview stays pose-neutral instead of guessing.
+- **Respawn / rejoin** — the preview re-applies itself automatically on your new character (v1.6.0). A manual Reset ends the preview and also cancels the auto re-apply.
+- **Animations** — the preview is an anchored puppet: every part copies your character's position each frame, so your animations follow automatically. The target's animations are never copied. Non-standard rigs fall back to ordered part pairing, so the preview still moves.
 - **Other players' view** — by design, they never see the preview. This tool is a personal preview, not a disguise.
 - **Game-specific overrides** — some games force their own animation packs, accessory rules, or character systems after spawn.
 
@@ -234,7 +234,7 @@ flowchart TD
 | `Could not load that avatar` | Usually a rate limit or a private avatar. Wait a few seconds and retry. |
 | `Preview failed` | The executor may block the avatar/model APIs, or the avatar may be private. The status should say details were copied to the clipboard; paste that report when asking for help. |
 | Nothing changes on my character | Make sure your character is fully loaded, then retry. In R6 games or locked-down executors, expect partial results. |
-| Preview disappears after respawning | Since v1.5.0 it re-applies itself automatically. If the target can no longer be resolved (left the server, private avatar), the status card explains why — copy the avatar again. |
+| Preview disappears after respawning | Since v1.6.0 it re-applies itself automatically. If the target can no longer be resolved (left the server, private avatar), the status card explains why — copy the avatar again. |
 | Reset does not remove the preview | Press **Reset** once more, or press the title-bar `×` and rerun the script. `AvatarCopier.reset()` is also available. |
 | My real character stays invisible | Reset/destroy should restore it. If the script was interrupted, rerun it; the next execution restores local visibility and removes stale overlays. |
 | The script crashes / shows a red error | Paste your clipboard into the bug report. It should contain the Avatar Copier version, context, error message, and traceback. If the clipboard is empty, copy the console output instead. |
@@ -257,10 +257,10 @@ No. There is no key system and no external authentication.
 The script itself does not touch server state or send data anywhere, but using third-party executors carries risk under Roblox's Terms of Use. You use it at your own risk — see [DISCLAIMER.md](DISCLAIMER.md).
 
 **Why does the preview disappear when I respawn?**
-It does not disappear anymore: the preview is reapplied to your new character automatically (v1.5.0). If re-applying fails — the target left the server or the avatar is private — the status card says so and you can copy again.
+It does not disappear anymore: the preview is reapplied to your new character automatically (v1.6.0). If re-applying fails — the target left the server or the avatar is private — the status card says so and you can copy again.
 
 **Does it copy animations too?**
-The preview's fresh `Animator` replays **your own** playing tracks (walk, run, emotes), so it follows what your character is doing. It never runs the target's animations or animation packs; some games also force their own animation set.
+The preview copies every part's position from your rig each frame, so it follows your animations exactly (an anchored puppet). It never runs the target's animation machinery or animation packs; some games also force their own animation set.
 
 **Can I copy someone who is not in my server?**
 Yes, by username or user ID, subject to Roblox API rate limits and avatar privacy.
@@ -288,7 +288,7 @@ The script is tested headlessly with open-source tooling — no Roblox client re
 - the in-server clone path and the username API path,
 - the local overlay is created, anchored, follow-driven, sanitized, and hidden-character state is restored,
 - the real LocalPlayer Humanoid is never passed to `ApplyDescription`,
-- a fresh `Animator` on the preview that mirrors your own AnimationTracks and never the target's,
+- the preview is an anchored puppet: joints and animation machinery stripped, all parts anchored, and part CFrames mirrored from your real rig (including the camera-zoom re-hide),
 - description/API and local-clone/partial fallback chains,
 - handled build failures write a diagnostic report to the clipboard,
 - unexpected errors include their context and traceback,
@@ -296,7 +296,7 @@ The script is tested headlessly with open-source tooling — no Roblox client re
 - cooldown, unknown user, empty input, reset, respawn auto re-apply (and its cancellation after Reset), and destroy cleanup,
 - no warnings on the successful-preview and validation paths.
 
-The suite currently runs `150` checks per profile (mobile and desktop).
+The suite currently runs `151` checks per profile (mobile and desktop).
 
 The suite runs twice, with a mobile and a desktop profile. CI runs the same script on every push.
 
@@ -325,7 +325,8 @@ docs/preview.svg        UI preview used by the README
 - [x] Automatic clipboard error reports with tracebacks (`1.2.0`)
 - [x] Client-only overlay preview that no longer calls `ApplyDescription` on the real Humanoid (`1.3.0`)
 - [x] Auto-jump-free anchored preview, minimize button, non-destructive close with a floating pill (`1.4.0`)
-- [x] Own-animation playback via a fresh `Animator` (target animations stripped) and automatic re-apply after respawn (`1.5.0`)
+- [x] Own-animation playback with target animation machinery stripped, plus automatic re-apply after respawn (`1.5.0`)
+- [x] Anchored part-position puppet for glitch-free movement (`1.6.0`)
 - [x] English and Indonesian documentation
 - [ ] Copy history and favourites
 - [ ] Partial copies (clothing only, accessories only, animations only)

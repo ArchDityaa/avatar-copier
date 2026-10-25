@@ -52,7 +52,7 @@ print("== avatar copier headless tests ==")
 
 local api = getgenv().AvatarCopier
 check(api ~= nil, "API is exposed through getgenv()")
-equal(api and api.version, "1.5.0", "version is 1.5.0")
+equal(api and api.version, "1.6.0", "version is 1.6.0")
 
 local expectedParent = IS_MOBILE and PlayerGui or hiddenContainer
 local gui = expectedParent:FindFirstChild("AvatarCopierGui")
@@ -189,39 +189,52 @@ if input and copyButton and statusLabel and statusDot and statusCard then
     equal(copyButton.Active, true, "copy button re-enabled after a copy")
     equal(ENV.__clipboard, nil, "a successful preview does not touch the clipboard")
 
-    -- Animation handling: the preview gets a fresh Animator, inherits no
-    -- animation from the target rig, and mirrors the LOCAL player's tracks.
-    local previewHumanoidAnimator = previewHumanoid and previewHumanoid:FindFirstChildOfClass("Animator")
-    check(previewHumanoidAnimator ~= nil, "preview gets a fresh Animator")
+    -- The preview is an anchored puppet: no joints, no Animator machinery,
+    -- and every part copied from the real character's CFrames.
+    local previewAnimator = previewHumanoid and previewHumanoid:FindFirstChildOfClass("Animator")
+    check(previewAnimator == nil, "preview carries no Animator machinery")
 
-    local animatorTracks = previewHumanoidAnimator and previewHumanoidAnimator:GetPlayingAnimationTracks() or {}
-    equal(#animatorTracks, 0, "the target's animations are stripped from the preview")
+    local anyJoint, anyAnimation, anyUnanchored = false, false, false
+    if preview then
+        for _, descendant in ipairs(preview:GetDescendants()) do
+            if descendant:IsA("JointInstance") then
+                anyJoint = true
+            elseif descendant:IsA("Animation") or descendant:IsA("AnimationTrack") then
+                anyAnimation = true
+            elseif descendant:IsA("BasePart") and descendant.Anchored ~= true then
+                anyUnanchored = true
+            end
+        end
+    end
+    equal(anyJoint, false, "preview strips every Motor6D/Weld joint")
+    equal(anyAnimation, false, "preview strips every animation asset and track")
+    equal(anyUnanchored, false, "every preview part is anchored")
 
-    local localAnimator = humanoid:FindFirstChildOfClass("Animator")
-    check(localAnimator ~= nil, "attach ensures the local Humanoid has an Animator")
-
-    if localAnimator and previewHumanoidAnimator then
-        local emoteAnimation = Instance.new("Animation")
-        emoteAnimation.Name = "LocalDance"
-        emoteAnimation.AnimationId = "rbxassetid://777"
-
-        local localTrack = localAnimator:LoadAnimation(emoteAnimation)
-        localTrack:Play()
-        localTrack:AdjustSpeed(2)
-        localTrack.TimePosition = 3
+    -- The puppet copies the real character's part CFrames every frame.
+    local sourceTorso = character:FindFirstChild("Torso")
+    local previewTorso = preview and preview:FindFirstChild("Torso")
+    local sourceHead = character:FindFirstChild("Head")
+    local previewHead = preview and preview:FindFirstChild("Head")
+    local function cf(x, y, z)
+        return { Position = { X = x, Y = y, Z = z } }
+    end
+    if sourceTorso and previewTorso and sourceHead and previewHead then
+        sourceTorso.CFrame = cf(3, 7, 1)
+        sourceHead.CFrame = cf(3, 10, 1)
         RunService.RenderStepped:Fire()
+        equal(previewTorso.CFrame.Position.X, 3, "preview torso copies the real torso position")
+        equal(previewTorso.CFrame.Position.Y, 7, "preview torso copies the real torso height")
+        equal(previewTorso.CFrame.Position.Z, 1, "preview torso copies the real torso depth")
+        equal(previewHead.CFrame.Position.Y, 10, "preview head follows the real head pose")
+    end
 
-        local mirrorTracks = previewHumanoidAnimator:GetPlayingAnimationTracks()
-        equal(#mirrorTracks, 1, "preview mirrors the local player's animation")
-        check(mirrorTracks[1] ~= nil and mirrorTracks[1].Animation ~= nil
-            and mirrorTracks[1].Animation.AnimationId == "rbxassetid://777",
-            "preview plays the same Animation asset as the local player")
-        equal(mirrorTracks[1] ~= nil and mirrorTracks[1].Speed or nil, 2, "preview track speed matches")
-        equal(mirrorTracks[1] ~= nil and mirrorTracks[1].TimePosition or nil, 3, "preview track time position is synced")
-
-        localTrack:Stop()
+    -- The engine recalculates LocalTransparencyModifier when the camera zooms;
+    -- the follow loop must re-apply the hidden state every frame.
+    if localRoot then
+        localRoot.LocalTransparencyModifier = 0
         RunService.RenderStepped:Fire()
-        equal(#previewHumanoidAnimator:GetPlayingAnimationTracks(), 0, "stopping the local track stops the preview track")
+        equal(localRoot.LocalTransparencyModifier, 1,
+            "the follow loop re-hides the real character after a camera zoom")
     end
 
     if resetButton then
@@ -365,7 +378,7 @@ if input and copyButton and statusLabel and statusDot then
     copyButton.MouseButton1Click:Fire()
 
     local clipboard = ENV.__clipboard or ""
-    contains(clipboard, "Avatar Copier v1.5.0 - error report", "build failure clipboard uses the current version")
+    contains(clipboard, "Avatar Copier v1.6.0 - error report", "build failure clipboard uses the current version")
     contains(clipboard, "Context: copy/build", "build failure clipboard includes the context")
     contains(clipboard, "Target: TestUser", "build failure clipboard includes the target")
     contains(clipboard, "Resolved user ID: 12345", "build failure clipboard includes the resolved ID")
@@ -412,7 +425,7 @@ if input and copyButton and statusLabel and statusDot then
     equal(reportOk, true, "error reporting survives a broken clipboard")
 end
 
--- Respawning while a preview is active re-applies it automatically (v1.5.0).
+-- Respawning while a preview is active re-applies it automatically (v1.6.0).
 if input and copyButton and statusLabel then
     advanceClock(2)
     input.Text = "ServerFriend"

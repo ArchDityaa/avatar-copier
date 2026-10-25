@@ -1,5 +1,5 @@
 --[[
-    Avatar Copier — v1.5.0
+    Avatar Copier — v1.6.0
     ----------------------
     A fully client-side Roblox avatar previewer for Delta Executor.
 
@@ -26,7 +26,7 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.5.0",
+    VERSION = "1.6.0",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
     ACCENT_PRESSED = Color3.fromRGB(79, 70, 229),
@@ -286,13 +286,9 @@ local overlay
 local overlayFolder
 local overlayConnection
 local hiddenInstances = {}
--- Parts of the real character that get LocalTransparencyModifier hidden. The
--- engine recalculates that property when the camera zooms, so the follow loop
--- re-applies it every frame.
-local ltmParts = {}
--- Mirrored animation tracks: [source track] = overlay track (or false while
--- the source track could not be loaded on the overlay Animator).
-local mirroredTracks = {}
+-- Anchored puppet pairs built at attach time: every preview part copies the
+-- CFrame of the matching part of the real character every frame.
+local partMap = {}
 -- Set after a successful copy. When the character respawns, the preview is
 -- re-applied automatically from this input (cleared by Reset/destroy).
 local lastCopyInput = nil
@@ -1695,6 +1691,7 @@ local function sanitizeOverlay(model)
             or descendant:IsA("ProximityPrompt")
             or descendant:IsA("BillboardGui")
             or descendant:IsA("BodyMover")
+            or descendant:IsA("JointInstance")
             or descendant:IsA("Animator")
             or descendant:IsA("AnimationController")
             or descendant:IsA("Animation")
@@ -1714,7 +1711,7 @@ local function sanitizeOverlay(model)
                 descendant.CanTouch = false
                 descendant.CanQuery = false
                 descendant.Massless = true
-                descendant.Anchored = false
+                descendant.Anchored = true
             end)
         end
     end
@@ -1808,6 +1805,7 @@ local function rememberHidden(instance, property, value, defaultValue)
         instance = instance,
         property = property,
         value = oldValue,
+        applied = value,
     })
 
     pcall(function()
@@ -1827,7 +1825,6 @@ local function hideLocalCharacter(character)
     for _, descendant in ipairs(character:GetDescendants()) do
         if descendant:IsA("BasePart") then
             rememberHidden(descendant, "LocalTransparencyModifier", 1, 0)
-            table.insert(ltmParts, descendant)
         elseif descendant:IsA("Decal") then
             rememberHidden(descendant, "Transparency", 1, 0)
         elseif descendant:IsA("BillboardGui")
@@ -1871,114 +1868,80 @@ function restoreLocalCharacter()
         end)
     end
     hiddenInstances = {}
-    ltmParts = {}
 end
 
--- The preview mirrors the LOCAL character's animations through Animator
--- tracks: whatever you play (walk, run, emotes) is loaded and played on the
--- preview's own fresh Animator. The target's animation machinery is destroyed
--- in sanitizeOverlay, so nothing from them ever plays. Motor6D transforms are
--- never copied across rigs, which avoids part-shearing glitches.
-local function ensureAnimator(humanoid, create)
-    if not humanoid then
-        return nil
+-- The preview is an anchored puppet: sanitizeOverlay strips every joint and
+-- animation machine from it, and attachOverlay pairs each remaining BasePart
+-- with the matching part of YOUR real character. Every frame the puppet part
+-- copies the source part's CFrame, so the preview reproduces your exact pose
+-- (walk, jump, sit, swim, emotes) with no Animator, no second physics rig, and
+-- no cross-rig track copying that could distort or fling the model.
+local function partKey(part)
+    local parent = part.Parent
+    if parent and parent:IsA("Accessory") then
+        return "accessory:" .. tostring(parent.Name) .. ":" .. tostring(part.Name)
     end
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-    if animator then
-        return animator
-    end
-    if not create then
-        return nil
-    end
-    local ok, created = pcall(function()
-        local fresh = Instance.new("Animator")
-        fresh.Name = "Animator"
-        fresh.Parent = humanoid
-        return fresh
-    end)
-    if not ok then
-        return nil
-    end
-    return created
+    return tostring(part.Name) .. ":" .. tostring(part.ClassName)
 end
 
-local function syncAnimationTracks(sourceAnimator, overlayAnimator)
-    if not sourceAnimator or not overlayAnimator then
-        return
-    end
-
-    local ok, sourceTracks = pcall(function()
-        return sourceAnimator:GetPlayingAnimationTracks()
-    end)
-    if not ok or type(sourceTracks) ~= "table" then
-        return
-    end
-
-    local playing = {}
-    for _, sourceTrack in ipairs(sourceTracks) do
-        playing[sourceTrack] = true
-
-        local animOk, animation = pcall(function()
-            return sourceTrack.Animation
-        end)
-        if not animOk or not animation then
-            continue
+local function collectPartList(model)
+    local list = {}
+    for _, descendant in ipairs(model:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            table.insert(list, { key = partKey(descendant), part = descendant })
         end
+    end
+    return list
+end
 
-        local overlayTrack = mirroredTracks[sourceTrack]
-        if overlayTrack == nil then
-            local loadOk, loaded = pcall(function()
-                return overlayAnimator:LoadAnimation(animation)
-            end)
-            if not loadOk or not loaded then
-                -- Remember the failure so we do not retry every frame.
-                mirroredTracks[sourceTrack] = false
-                continue
-            end
-            overlayTrack = loaded
-            mirroredTracks[sourceTrack] = overlayTrack
-            pcall(function()
-                overlayTrack:Play(0.05)
-            end)
-        end
-        if overlayTrack ~= false then
-            local speedOk, speed = pcall(function()
-                return sourceTrack.Speed
-            end)
-            if speedOk and type(speed) == "number" then
-                pcall(function()
-                    overlayTrack:AdjustSpeed(speed)
-                end)
-            end
-            local weightOk, weight = pcall(function()
-                return sourceTrack.Weight
-            end)
-            if weightOk and type(weight) == "number" then
-                pcall(function()
-                    overlayTrack:AdjustWeight(weight)
-                end)
-            end
-            local timeOk, timePos = pcall(function()
-                return sourceTrack.TimePosition
-            end)
-            if timeOk and type(timePos) == "number" then
-                pcall(function()
-                    overlayTrack.TimePosition = timePos
-                end)
-            end
+local function buildPartMap(sourceCharacter, overlayModel)
+    local sources = collectPartList(sourceCharacter)
+    local targets = collectPartList(overlayModel)
+
+    local sourceByKey = {}
+    for _, entry in ipairs(sources) do
+        if sourceByKey[entry.key] == nil then
+            sourceByKey[entry.key] = entry.part
         end
     end
 
-    for sourceTrack, overlayTrack in pairs(mirroredTracks) do
-        if not playing[sourceTrack] then
-            if overlayTrack ~= false then
-                pcall(function()
-                    overlayTrack:Stop(0.1)
-                end)
-            end
-            mirroredTracks[sourceTrack] = nil
+    partMap = {}
+    local usedTarget = {}
+    for _, entry in ipairs(targets) do
+        local source = sourceByKey[entry.key]
+        if source then
+            table.insert(partMap, { source = source, target = entry.part })
+            usedTarget[entry.part] = true
         end
     end
+
+    -- Fallback for non-standard rigs: pair leftover parts in discovery order
+    -- so the preview still moves instead of standing frozen.
+    local matchedSource = {}
+    for _, pair in ipairs(partMap) do
+        matchedSource[pair.source] = true
+    end
+    local leftoverSources = {}
+    for _, entry in ipairs(sources) do
+        if not matchedSource[entry.part] then
+            table.insert(leftoverSources, entry.part)
+        end
+    end
+    local leftoverTargets = {}
+    for _, entry in ipairs(targets) do
+        if not usedTarget[entry.part] then
+            table.insert(leftoverTargets, entry.part)
+        end
+    end
+    local leftoverCount = math.min(#leftoverSources, #leftoverTargets)
+    for index = 1, leftoverCount do
+        table.insert(partMap, {
+            source = leftoverSources[index],
+            target = leftoverTargets[index],
+        })
+    end
+
+    return #partMap
 end
 
 local function attachOverlay(model, localHumanoid, localCharacter)
@@ -2008,57 +1971,40 @@ local function attachOverlay(model, localHumanoid, localCharacter)
     overlay = model
     hideLocalCharacter(localCharacter)
 
-    -- Fresh Animator on the preview: sanitizeOverlay removed every Animator
-    -- that came from the target's rig, so no target animation machinery can
-    -- ever play here. The preview only ever plays tracks loaded from the
-    -- LOCAL player's Animator.
-    local overlayAnimator = ensureAnimator(overlayHumanoid, true)
-    local sourceAnimator = ensureAnimator(localHumanoid, true)
-    if overlayAnimator and sourceAnimator then
-        local overlayRig = nil
-        local sourceRig = nil
-        pcall(function()
-            overlayRig = overlayHumanoid.RigType
-        end)
-        pcall(function()
-            sourceRig = localHumanoid.RigType
-        end)
-        if overlayRig and sourceRig and overlayRig ~= sourceRig then
-            -- Different rig families would distort copied tracks; skip the
-            -- animation sync entirely and keep the pose-neutral preview.
-            overlayAnimator = nil
-        end
+    local pairCount = buildPartMap(localCharacter, model)
+    if pairCount == 0 then
+        return false, "no matching body parts between your character and the preview"
     end
 
-    -- The preview root is anchored and follows the real character every
-    -- frame. Nothing is physically attached to the live rig, so the preview
-    -- cannot inject impulses into the local Humanoid (this caused unwanted
-    -- auto-jumping while walking on mobile).
-    local followPose = function()
-        pcall(function()
-            model:PivotTo(sourceRoot.CFrame)
-        end)
-        if overlayRoot.Parent then
+    -- Every preview part is anchored, so nothing can fall, fly, or fight the
+    -- physics engine. The puppet copies your parts' CFrames directly, which is
+    -- deterministic and immune to rig/joint mismatches.
+    local copyPose = function()
+        if sourceRoot.Parent then
             overlayRoot.CFrame = sourceRoot.CFrame
         end
-        if overlayAnimator and sourceAnimator then
-            syncAnimationTracks(sourceAnimator, overlayAnimator)
-        end
-        -- The engine resets LocalTransparencyModifier when the camera zooms,
-        -- so re-apply the hidden state every frame.
-        for _, part in ipairs(ltmParts) do
-            if part.Parent then
-                pcall(function()
-                    part.LocalTransparencyModifier = 1
-                end)
+        for _, pair in ipairs(partMap) do
+            local source = pair.source
+            local target = pair.target
+            if source.Parent and target.Parent then
+                target.CFrame = source.CFrame
             end
         end
+        -- The engine recalculates LocalTransparencyModifier when the camera
+        -- zooms, so re-apply the hidden state every frame.
+        pcall(function()
+            for _, entry in ipairs(hiddenInstances) do
+                if entry.instance and entry.instance.Parent then
+                    entry.instance[entry.property] = entry.applied
+                end
+            end
+        end)
     end
 
     local connection
     local failedFrames = 0
     connection = RunService.RenderStepped:Connect(function()
-        local ok = pcall(followPose)
+        local ok = pcall(copyPose)
         if not ok then
             failedFrames = failedFrames + 1
             -- A single failed frame (mid-clone, respawn race) should not kill
@@ -2089,14 +2035,7 @@ function removeOverlay()
         overlayConnection = nil
     end
 
-    for _, overlayTrack in pairs(mirroredTracks) do
-        if overlayTrack ~= false then
-            pcall(function()
-                overlayTrack:Stop(0)
-            end)
-        end
-    end
-    mirroredTracks = {}
+    partMap = {}
 
     if overlay then
         pcall(function()
