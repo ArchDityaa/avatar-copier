@@ -1,5 +1,5 @@
 --[[
-    Avatar Copier — v1.0.1
+    Avatar Copier — v1.1.0
     ----------------------
     A fully client-side Roblox avatar copier for Delta Executor.
 
@@ -23,23 +23,58 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.0.1",
+    VERSION = "1.1.0",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
+    ACCENT_PRESSED = Color3.fromRGB(79, 70, 229),
     COPY_COOLDOWN = 1.5, -- seconds; keeps the avatar API from rate-limiting you
+    WINDOW_WIDTH = 320,
+    WINDOW_HEIGHT = 272,
+    MIN_SCALE = 0.8,
     START_POSITION = UDim2.fromOffset(60, 100),
+    MOBILE_POSITION = UDim2.fromOffset(16, 64),
 }
 
 local COLORS = {
     background = Color3.fromRGB(24, 24, 27),
-    surface = Color3.fromRGB(39, 39, 46),
+    surface = Color3.fromRGB(35, 35, 41),
+    surfaceAlt = Color3.fromRGB(42, 42, 50),
     surfaceHover = Color3.fromRGB(52, 52, 61),
     stroke = Color3.fromRGB(63, 63, 70),
+    strokeSoft = Color3.fromRGB(45, 45, 52),
     text = Color3.fromRGB(244, 244, 245),
     textMuted = Color3.fromRGB(161, 161, 170),
     success = Color3.fromRGB(74, 222, 128),
     error = Color3.fromRGB(248, 113, 113),
     warning = Color3.fromRGB(250, 204, 21),
+}
+
+local STATUS_THEMES = {
+    idle = {
+        dot = COLORS.textMuted,
+        background = COLORS.surface,
+        text = COLORS.textMuted,
+    },
+    loading = {
+        dot = COLORS.warning,
+        background = Color3.fromRGB(45, 40, 26),
+        text = COLORS.warning,
+    },
+    success = {
+        dot = COLORS.success,
+        background = Color3.fromRGB(26, 48, 37),
+        text = COLORS.success,
+    },
+    warning = {
+        dot = COLORS.warning,
+        background = Color3.fromRGB(48, 42, 24),
+        text = COLORS.warning,
+    },
+    error = {
+        dot = COLORS.error,
+        background = Color3.fromRGB(52, 31, 33),
+        text = COLORS.error,
+    },
 }
 
 local Players = game:GetService("Players")
@@ -56,17 +91,29 @@ local LOG_PREFIX = "[Avatar Copier]"
 -- ---------------------------------------------------------------- state
 
 local busy = false
-local lastCopyAt = 0
+local lastCopyAt = -math.huge
 local originalDescription = nil
 local destroyed = false
 
 local screenGui
-local statusLabel
+local window
+local uiScale
+local statusCard
+local statusDot
+local statusText
 local inputBox
 local copyButton
 local resetButton
+local clearButton
 
 -- ------------------------------------------------------------ utilities
+
+local connections = {}
+
+local function track(connection)
+    table.insert(connections, connection)
+    return connection
+end
 
 local function makeCorner(parent, radius)
     local corner = Instance.new("UICorner")
@@ -75,8 +122,19 @@ local function makeCorner(parent, radius)
     return corner
 end
 
-local function makeLabel(parent, text, size, position, font, color, textSize)
+local function makeStroke(parent, color, thickness)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color
+    stroke.Thickness = thickness or 1
+    stroke.Parent = parent
+    return stroke
+end
+
+local function makeLabel(parent, text, size, position, font, color, textSize, name)
     local label = Instance.new("TextLabel")
+    if name then
+        label.Name = name
+    end
     label.BackgroundTransparency = 1
     label.Size = size
     label.Position = position
@@ -89,34 +147,111 @@ local function makeLabel(parent, text, size, position, font, color, textSize)
     return label
 end
 
-local function styleButton(button, baseColor, hoverColor)
-    button.AutoButtonColor = false
+local function makeButton(parent, name, text, size, position, font, textSize, textColor, baseColor)
+    local button = Instance.new("TextButton")
+    button.Name = name
+    button.Size = size
+    button.Position = position
     button.BackgroundColor3 = baseColor
-
-    button.MouseEnter:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = hoverColor }):Play()
-    end)
-    button.MouseLeave:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = baseColor }):Play()
-    end)
+    button.BorderSizePixel = 0
+    button.AutoButtonColor = false
+    button.Active = true
+    button.Text = text
+    button.Font = font
+    button.TextSize = textSize
+    button.TextColor3 = textColor
+    button.Parent = parent
+    makeCorner(button, 9)
+    return button
 end
 
-local function setStatus(message, color)
-    if destroyed or not statusLabel then
+local function styleButton(button, baseColor, hoverColor)
+    button.BackgroundColor3 = baseColor
+
+    track(button.MouseEnter:Connect(function()
+        if button.Active == false then
+            return
+        end
+        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = hoverColor }):Play()
+    end))
+
+    track(button.MouseLeave:Connect(function()
+        if button.Active == false then
+            return
+        end
+        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = baseColor }):Play()
+    end))
+end
+
+local function setStatus(message, state)
+    if destroyed or not statusText then
         return
     end
-    statusLabel.Text = message
-    statusLabel.TextColor3 = color or COLORS.textMuted
+
+    local theme = STATUS_THEMES[state or "idle"] or STATUS_THEMES.idle
+    statusText.Text = message
+    statusText.TextColor3 = theme.text
+
+    if statusDot then
+        statusDot.BackgroundColor3 = theme.dot
+    end
+
+    if statusCard then
+        TweenService:Create(
+            statusCard,
+            TweenInfo.new(0.15),
+            { BackgroundColor3 = theme.background }
+        ):Play()
+    end
+end
+
+local function setControlsEnabled(enabled)
+    if copyButton then
+        copyButton.Active = enabled
+        copyButton.BackgroundColor3 = enabled and CONFIG.ACCENT or CONFIG.ACCENT_PRESSED
+    end
+
+    if resetButton then
+        resetButton.Active = enabled
+        resetButton.BackgroundColor3 = enabled and COLORS.surface or COLORS.surfaceAlt
+    end
+
+    if clearButton then
+        clearButton.Active = enabled
+    end
+end
+
+local function setBusy(value)
+    busy = value
+
+    if copyButton then
+        copyButton.Text = value and "Copying..." or "Copy avatar"
+    end
+
+    setControlsEnabled(not value)
+end
+
+local function refreshClearButton()
+    if clearButton and inputBox then
+        clearButton.Visible = inputBox.Text ~= ""
+    end
+end
+
+local function updateScale()
+    if not uiScale then
+        return
+    end
+
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+    local availableX = math.max(1, viewport.X - 24)
+    local availableY = math.max(1, viewport.Y - 24)
+    local scale = math.min(1, availableX / CONFIG.WINDOW_WIDTH, availableY / CONFIG.WINDOW_HEIGHT)
+
+    uiScale.Scale = math.clamp(scale, CONFIG.MIN_SCALE, 1)
 end
 
 -- ------------------------------------------------------------ GUI
-
-local connections = {}
-
-local function track(connection)
-    table.insert(connections, connection)
-    return connection
-end
 
 local function getPlayerGui()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
@@ -256,6 +391,249 @@ local function removePreviousGuis()
     end
 end
 
+local function buildHeader(titleBar)
+    local logo = Instance.new("Frame")
+    logo.Name = "Logo"
+    logo.Size = UDim2.fromOffset(26, 26)
+    logo.Position = UDim2.fromOffset(14, 9)
+    logo.BackgroundColor3 = CONFIG.ACCENT
+    logo.BorderSizePixel = 0
+    logo.Parent = titleBar
+    makeCorner(logo, 8)
+
+    local mark = makeLabel(
+        logo,
+        "A",
+        UDim2.fromScale(1, 1),
+        UDim2.fromScale(0, 0),
+        Enum.Font.GothamBlack,
+        Color3.fromRGB(255, 255, 255),
+        13,
+        "Mark"
+    )
+    mark.TextXAlignment = Enum.TextXAlignment.Center
+    mark.TextYAlignment = Enum.TextYAlignment.Center
+
+    makeLabel(
+        titleBar,
+        "Avatar Copier",
+        UDim2.new(1, -170, 1, 0),
+        UDim2.fromOffset(50, 0),
+        Enum.Font.GothamBold,
+        COLORS.text,
+        14,
+        "Title"
+    )
+
+    local versionPill = Instance.new("Frame")
+    versionPill.Name = "VersionPill"
+    versionPill.Size = UDim2.fromOffset(54, 20)
+    versionPill.Position = UDim2.new(1, -104, 0, 12)
+    versionPill.BackgroundColor3 = COLORS.surfaceAlt
+    versionPill.BorderSizePixel = 0
+    versionPill.Parent = titleBar
+    makeCorner(versionPill, 6)
+
+    local versionText = makeLabel(
+        versionPill,
+        "v" .. CONFIG.VERSION,
+        UDim2.fromScale(1, 1),
+        UDim2.fromScale(0, 0),
+        Enum.Font.Gotham,
+        COLORS.textMuted,
+        10,
+        "Text"
+    )
+    versionText.TextXAlignment = Enum.TextXAlignment.Center
+    versionText.TextYAlignment = Enum.TextYAlignment.Center
+
+    local closeButton = makeButton(
+        titleBar,
+        "Close",
+        "×",
+        UDim2.fromOffset(32, 32),
+        UDim2.new(1, -42, 0, 6),
+        Enum.Font.GothamBold,
+        18,
+        COLORS.textMuted,
+        COLORS.surfaceAlt
+    )
+    styleButton(closeButton, COLORS.surfaceAlt, COLORS.surfaceHover)
+
+    return closeButton
+end
+
+local function buildSearchIcon(parent, position)
+    local icon = Instance.new("Frame")
+    icon.Name = "SearchIcon"
+    icon.Size = UDim2.fromOffset(16, 16)
+    icon.Position = position
+    icon.BackgroundTransparency = 1
+    icon.Parent = parent
+
+    local lens = Instance.new("Frame")
+    lens.Name = "Lens"
+    lens.Size = UDim2.fromOffset(9, 9)
+    lens.Position = UDim2.fromOffset(1, 1)
+    lens.BackgroundTransparency = 1
+    lens.Parent = icon
+    makeCorner(lens, 99)
+    makeStroke(lens, COLORS.textMuted, 1.5)
+
+    local handle = Instance.new("Frame")
+    handle.Name = "Handle"
+    handle.Size = UDim2.fromOffset(6, 2)
+    handle.Position = UDim2.fromOffset(9, 10)
+    handle.BackgroundColor3 = COLORS.textMuted
+    handle.BorderSizePixel = 0
+    handle.Rotation = 45
+    handle.Parent = icon
+    makeCorner(handle, 1)
+end
+
+local function buildBody(parent)
+    makeLabel(
+        parent,
+        "TARGET PLAYER",
+        UDim2.fromOffset(200, 12),
+        UDim2.fromOffset(14, 58),
+        Enum.Font.GothamBold,
+        COLORS.textMuted,
+        10,
+        "TargetLabel"
+    )
+
+    inputBox = Instance.new("TextBox")
+    inputBox.Name = "TargetInput"
+    inputBox.Size = UDim2.new(1, -28, 0, 40)
+    inputBox.Position = UDim2.fromOffset(14, 74)
+    inputBox.BackgroundColor3 = COLORS.surface
+    inputBox.BorderSizePixel = 0
+    inputBox.Font = Enum.Font.Gotham
+    inputBox.TextSize = 13
+    inputBox.TextColor3 = COLORS.text
+    inputBox.PlaceholderText = "Username, user ID, or profile URL"
+    inputBox.PlaceholderColor3 = COLORS.textMuted
+    inputBox.Text = ""
+    inputBox.ClearTextOnFocus = false
+    inputBox.TextXAlignment = Enum.TextXAlignment.Left
+    inputBox.Parent = parent
+    makeCorner(inputBox, 10)
+    local inputStroke = makeStroke(inputBox, COLORS.stroke, 1)
+
+    track(inputBox.Focused:Connect(function()
+        inputStroke.Color = CONFIG.ACCENT
+    end))
+
+    track(inputBox.FocusLost:Connect(function()
+        inputStroke.Color = COLORS.stroke
+    end))
+
+    local inputPadding = Instance.new("UIPadding")
+    inputPadding.PaddingLeft = UDim.new(0, 34)
+    inputPadding.PaddingRight = UDim.new(0, 34)
+    inputPadding.Parent = inputBox
+
+    -- Icons are siblings of the TextBox: UIPadding would also offset children.
+    buildSearchIcon(parent, UDim2.fromOffset(26, 86))
+
+    clearButton = makeButton(
+        parent,
+        "Clear",
+        "×",
+        UDim2.fromOffset(24, 24),
+        UDim2.fromOffset(276, 82),
+        Enum.Font.GothamBold,
+        14,
+        COLORS.textMuted,
+        COLORS.surfaceAlt
+    )
+    clearButton.Visible = false
+    styleButton(clearButton, COLORS.surfaceAlt, COLORS.surfaceHover)
+
+    makeLabel(
+        parent,
+        "Username, user ID, or profile URL",
+        UDim2.new(1, -28, 0, 12),
+        UDim2.fromOffset(14, 118),
+        Enum.Font.Gotham,
+        COLORS.textMuted,
+        10,
+        "Helper"
+    )
+
+    copyButton = makeButton(
+        parent,
+        "Copy",
+        "Copy avatar",
+        UDim2.fromOffset(196, 40),
+        UDim2.fromOffset(14, 138),
+        Enum.Font.GothamBold,
+        13,
+        Color3.fromRGB(255, 255, 255),
+        CONFIG.ACCENT
+    )
+    styleButton(copyButton, CONFIG.ACCENT, CONFIG.ACCENT_HOVER)
+
+    resetButton = makeButton(
+        parent,
+        "Reset",
+        "Reset",
+        UDim2.fromOffset(88, 40),
+        UDim2.fromOffset(218, 138),
+        Enum.Font.GothamMedium,
+        13,
+        COLORS.text,
+        COLORS.surface
+    )
+    makeStroke(resetButton, COLORS.stroke, 1)
+    styleButton(resetButton, COLORS.surface, COLORS.surfaceHover)
+
+    statusCard = Instance.new("Frame")
+    statusCard.Name = "StatusCard"
+    statusCard.Size = UDim2.new(1, -28, 0, 48)
+    statusCard.Position = UDim2.fromOffset(14, 190)
+    statusCard.BackgroundColor3 = COLORS.surface
+    statusCard.BorderSizePixel = 0
+    statusCard.Parent = parent
+    makeCorner(statusCard, 10)
+    makeStroke(statusCard, COLORS.strokeSoft, 1)
+
+    statusDot = Instance.new("Frame")
+    statusDot.Name = "Dot"
+    statusDot.Size = UDim2.fromOffset(6, 6)
+    statusDot.Position = UDim2.fromOffset(12, 21)
+    statusDot.BackgroundColor3 = COLORS.textMuted
+    statusDot.BorderSizePixel = 0
+    statusDot.Parent = statusCard
+    makeCorner(statusDot, 99)
+
+    statusText = makeLabel(
+        statusCard,
+        "Enter a username to begin.",
+        UDim2.new(1, -38, 1, 0),
+        UDim2.fromOffset(26, 0),
+        Enum.Font.Gotham,
+        COLORS.textMuted,
+        11,
+        "StatusText"
+    )
+    statusText.TextWrapped = true
+    statusText.TextYAlignment = Enum.TextYAlignment.Center
+
+    local footer = makeLabel(
+        parent,
+        "Client-side only — other players can't see it.",
+        UDim2.new(1, -28, 0, 14),
+        UDim2.fromOffset(14, 248),
+        Enum.Font.Gotham,
+        COLORS.textMuted,
+        10,
+        "Footer"
+    )
+    footer.TextTransparency = 0.15
+end
+
 local function buildInterface()
     removePreviousGuis()
 
@@ -279,24 +657,26 @@ local function buildInterface()
 
     print(("%s GUI attached to %s."):format(LOG_PREFIX, parentName))
 
-    local window = Instance.new("Frame")
+    local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+    local startPosition = isMobile and CONFIG.MOBILE_POSITION or CONFIG.START_POSITION
+
+    window = Instance.new("Frame")
     window.Name = "Window"
-    window.Size = UDim2.fromOffset(300, 196)
-    window.Position = CONFIG.START_POSITION
+    window.Size = UDim2.fromOffset(CONFIG.WINDOW_WIDTH, CONFIG.WINDOW_HEIGHT)
+    window.Position = startPosition
     window.BackgroundColor3 = COLORS.background
     window.BorderSizePixel = 0
     window.Parent = screenGui
-
     makeCorner(window, 12)
+    makeStroke(window, COLORS.stroke, 1)
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = COLORS.stroke
-    stroke.Thickness = 1
-    stroke.Parent = window
+    uiScale = Instance.new("UIScale")
+    uiScale.Scale = 1
+    uiScale.Parent = window
 
     local titleBar = Instance.new("Frame")
     titleBar.Name = "TitleBar"
-    titleBar.Size = UDim2.new(1, 0, 0, 34)
+    titleBar.Size = UDim2.new(1, 0, 0, 44)
     titleBar.BackgroundColor3 = COLORS.surface
     titleBar.BorderSizePixel = 0
     titleBar.Parent = window
@@ -309,123 +689,34 @@ local function buildInterface()
     titleFill.BorderSizePixel = 0
     titleFill.Parent = titleBar
 
-    makeLabel(
-        titleBar,
-        "Avatar Copier",
-        UDim2.new(1, -90, 1, 0),
-        UDim2.fromOffset(12, 0),
-        Enum.Font.GothamBold,
-        COLORS.text,
-        14
-    )
+    local closeButton = buildHeader(titleBar)
+    buildBody(window)
+    updateScale()
 
-    makeLabel(
-        titleBar,
-        "v" .. CONFIG.VERSION,
-        UDim2.fromOffset(48, 34),
-        UDim2.new(1, -80, 0, 0),
-        Enum.Font.Gotham,
-        COLORS.textMuted,
-        11
-    )
+    -- Responsive scale ------------------------------------------------
 
-    local closeButton = Instance.new("TextButton")
-    closeButton.Name = "Close"
-    closeButton.Size = UDim2.fromOffset(24, 24)
-    closeButton.Position = UDim2.new(1, -32, 0, 5)
-    closeButton.BackgroundColor3 = COLORS.surface
-    closeButton.BorderSizePixel = 0
-    closeButton.Text = "×"
-    closeButton.Font = Enum.Font.GothamBold
-    closeButton.TextSize = 16
-    closeButton.TextColor3 = COLORS.textMuted
-    closeButton.Parent = titleBar
-    makeCorner(closeButton, 6)
-    styleButton(closeButton, COLORS.surface, COLORS.surfaceHover)
-
-    inputBox = Instance.new("TextBox")
-    inputBox.Name = "TargetInput"
-    inputBox.Size = UDim2.new(1, -24, 0, 36)
-    inputBox.Position = UDim2.fromOffset(12, 44)
-    inputBox.BackgroundColor3 = COLORS.surface
-    inputBox.BorderSizePixel = 0
-    inputBox.Font = Enum.Font.Gotham
-    inputBox.TextSize = 13
-    inputBox.TextColor3 = COLORS.text
-    inputBox.PlaceholderText = "Username, user ID, or profile URL"
-    inputBox.PlaceholderColor3 = COLORS.textMuted
-    inputBox.Text = ""
-    inputBox.ClearTextOnFocus = true
-    inputBox.TextXAlignment = Enum.TextXAlignment.Left
-    inputBox.Parent = window
-    makeCorner(inputBox, 8)
-
-    local inputPadding = Instance.new("UIPadding")
-    inputPadding.PaddingLeft = UDim.new(0, 10)
-    inputPadding.PaddingRight = UDim.new(0, 10)
-    inputPadding.Parent = inputBox
-
-    copyButton = Instance.new("TextButton")
-    copyButton.Name = "Copy"
-    copyButton.Size = UDim2.fromOffset(184, 34)
-    copyButton.Position = UDim2.fromOffset(12, 88)
-    copyButton.BorderSizePixel = 0
-    copyButton.Font = Enum.Font.GothamBold
-    copyButton.TextSize = 13
-    copyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    copyButton.Text = "Copy"
-    copyButton.Parent = window
-    makeCorner(copyButton, 8)
-    styleButton(copyButton, CONFIG.ACCENT, CONFIG.ACCENT_HOVER)
-
-    resetButton = Instance.new("TextButton")
-    resetButton.Name = "Reset"
-    resetButton.Size = UDim2.fromOffset(84, 34)
-    resetButton.Position = UDim2.fromOffset(204, 88)
-    resetButton.BorderSizePixel = 0
-    resetButton.Font = Enum.Font.GothamMedium
-    resetButton.TextSize = 13
-    resetButton.TextColor3 = COLORS.text
-    resetButton.Text = "Reset"
-    resetButton.Parent = window
-    makeCorner(resetButton, 8)
-    styleButton(resetButton, COLORS.surface, COLORS.surfaceHover)
-
-    statusLabel = makeLabel(
-        window,
-        "Enter a username to begin.",
-        UDim2.new(1, -24, 0, 28),
-        UDim2.fromOffset(12, 130),
-        Enum.Font.Gotham,
-        COLORS.textMuted,
-        11
-    )
-    statusLabel.TextWrapped = true
-    statusLabel.TextYAlignment = Enum.TextYAlignment.Top
-
-    local footer = makeLabel(
-        window,
-        "Local preview only — other players can't see it.",
-        UDim2.new(1, -24, 0, 14),
-        UDim2.fromOffset(12, 164),
-        Enum.Font.Gotham,
-        COLORS.textMuted,
-        10
-    )
-    footer.TextTransparency = 0.25
+    local camera = workspace.CurrentCamera
+    if camera then
+        local ok, signal = pcall(function()
+            return camera:GetPropertyChangedSignal("ViewportSize")
+        end)
+        if ok and signal then
+            track(signal:Connect(updateScale))
+        end
+    end
 
     -- dragging -------------------------------------------------------
 
     local dragging = false
     local dragStart
-    local startPosition
+    local startPositionAbsolute
 
     track(titleBar.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
-            startPosition = window.AbsolutePosition
+            startPositionAbsolute = window.AbsolutePosition
         end
     end))
 
@@ -438,17 +729,17 @@ local function buildInterface()
             return
         end
 
-        local camera = workspace.CurrentCamera
-        local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+        local currentCamera = workspace.CurrentCamera
+        local viewport = currentCamera and currentCamera.ViewportSize or Vector2.new(1920, 1080)
         local delta = input.Position - dragStart
 
         local x = math.clamp(
-            startPosition.X + delta.X,
+            startPositionAbsolute.X + delta.X,
             0,
             math.max(0, viewport.X - window.AbsoluteSize.X)
         )
         local y = math.clamp(
-            startPosition.Y + delta.Y,
+            startPositionAbsolute.Y + delta.Y,
             0,
             math.max(0, viewport.Y - window.AbsoluteSize.Y)
         )
@@ -474,7 +765,9 @@ local function buildInterface()
                 connection:Disconnect()
             end)
         end
-        screenGui:Destroy()
+        if screenGui then
+            screenGui:Destroy()
+        end
         if type(getgenv) == "function" and getgenv().AvatarCopier then
             getgenv().AvatarCopier = nil
         end
@@ -654,27 +947,24 @@ local function copyAvatar(rawTarget)
         return false, "Interface is closed."
     end
     if busy then
-        setStatus("A copy is already in progress.", COLORS.warning)
+        setStatus("A copy is already in progress.", "warning")
         return false, "A copy is already in progress."
     end
     if os.clock() - lastCopyAt < CONFIG.COPY_COOLDOWN then
-        setStatus("Please wait a moment before trying again.", COLORS.warning)
+        setStatus("Please wait a moment before trying again.", "warning")
         return false, "Please wait a moment before trying again."
     end
 
     local kind, value = parseTarget(rawTarget)
     if not kind then
-        setStatus("Enter a username or user ID first.", COLORS.error)
+        setStatus("Enter a username or user ID first.", "error")
         return false, "Empty input."
     end
 
     local displayTarget = tostring(value)
 
-    busy = true
-    if copyButton then
-        copyButton.Text = "Working…"
-    end
-    setStatus("Resolving avatar…", COLORS.warning)
+    setBusy(true)
+    setStatus("Resolving avatar...", "loading")
 
     local description, source, resolvedName = resolveDescription(kind, value)
 
@@ -684,17 +974,14 @@ local function copyAvatar(rawTarget)
     end
 
     if not description then
-        busy = false
-        if copyButton then
-            copyButton.Text = "Copy"
-        end
+        setBusy(false)
 
         if source == "not_found" then
-            setStatus("Player not found. Check the spelling.", COLORS.error)
+            setStatus("Player not found. Check the spelling.", "error")
             return false, "Player not found."
         end
 
-        setStatus("Could not load that avatar (invalid ID, private, or rate-limited).", COLORS.error)
+        setStatus("Could not load that avatar (invalid ID, private, or rate-limited).", "error")
         return false, "Avatar fetch failed."
     end
 
@@ -702,12 +989,14 @@ local function copyAvatar(rawTarget)
 
     local humanoid = getLocalHumanoid()
     if not humanoid then
-        busy = false
-        if copyButton then
-            copyButton.Text = "Copy"
-        end
-        setStatus("Your character is not ready yet.", COLORS.error)
+        setBusy(false)
+        setStatus("Your character is not ready yet.", "error")
         return false, "Character not ready."
+    end
+
+    if destroyed then
+        busy = false
+        return false, "Interface is closed."
     end
 
     -- Snapshot the player's original look once, for the Reset button.
@@ -720,22 +1009,19 @@ local function copyAvatar(rawTarget)
         end
     end
 
-    setStatus("Applying avatar locally…", COLORS.warning)
+    setStatus("Applying avatar locally...", "loading")
     local ok, detail = applyLocally(humanoid, description)
 
-    busy = false
-    if copyButton then
-        copyButton.Text = "Copy"
-    end
+    setBusy(false)
 
     if ok then
         lastCopyAt = os.clock()
-        setStatus(("Copied from %s (local only)"):format(label), COLORS.success)
+        setStatus(("Copied from %s (local only)"):format(label), "success")
         return true, "Avatar applied via " .. tostring(detail)
     end
 
     warn(("%s Failed to apply description: %s"):format(LOG_PREFIX, tostring(detail)))
-    setStatus("Failed to apply. Try another avatar or rejoin.", COLORS.error)
+    setStatus("Failed to apply. Try another avatar or rejoin.", "error")
     return false, "Apply failed."
 end
 
@@ -743,17 +1029,21 @@ local function resetAvatar()
     if destroyed then
         return false, "Interface is closed."
     end
+    if busy then
+        setStatus("Wait for the current copy to finish.", "warning")
+        return false, "A copy is already in progress."
+    end
 
     local humanoid = getLocalHumanoid()
     if not humanoid then
-        setStatus("Your character is not ready yet.", COLORS.error)
+        setStatus("Your character is not ready yet.", "error")
         return false, "Character not ready."
     end
 
     if originalDescription then
         local ok = applyLocally(humanoid, originalDescription)
         if ok then
-            setStatus("Restored your own avatar.", COLORS.success)
+            setStatus("Restored your own avatar.", "success")
             return true, "Original avatar restored."
         end
     end
@@ -762,11 +1052,11 @@ local function resetAvatar()
         LocalPlayer:ClearCharacterAppearance()
     end)
     if ok then
-        setStatus("Restored your own avatar.", COLORS.success)
+        setStatus("Restored your own avatar.", "success")
         return true, "Appearance cleared."
     end
 
-    setStatus("Could not restore your avatar.", COLORS.error)
+    setStatus("Could not restore your avatar.", "error")
     return false, "Reset failed."
 end
 
@@ -790,6 +1080,21 @@ end))
 
 track(resetButton.MouseButton1Click:Connect(function()
     task.spawn(resetAvatar)
+end))
+
+track(clearButton.MouseButton1Click:Connect(function()
+    inputBox.Text = ""
+    refreshClearButton()
+    setStatus("Enter a username to begin.", "idle")
+    pcall(function()
+        inputBox:CaptureFocus()
+    end)
+end))
+
+track(inputBox.Changed:Connect(function(property)
+    if property == "Text" then
+        refreshClearButton()
+    end
 end))
 
 track(inputBox.FocusLost:Connect(function(enterPressed)

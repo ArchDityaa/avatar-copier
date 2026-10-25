@@ -29,6 +29,7 @@ local EVENT_NAMES = {
     InputChanged = true,
     InputEnded = true,
     FocusLost = true,
+    Focused = true,
     Activated = true,
     Changed = true,
 }
@@ -252,6 +253,9 @@ UDim2 = {
     end,
     fromOffset = function(x, y)
         return UDim2.new(0, x, 0, y)
+    end,
+    fromScale = function(x, y)
+        return UDim2.new(x, 0, y, 0)
     end,
 }
 
