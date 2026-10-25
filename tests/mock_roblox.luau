@@ -32,10 +32,14 @@ local EVENT_NAMES = {
     Focused = true,
     Activated = true,
     Changed = true,
+    CharacterAdded = true,
+    CharacterRemoving = true,
+    AncestryChanged = true,
 }
 
 local InstanceMT = {}
 local METHODS = {}
+local newInstance
 
 local function props(instance)
     return rawget(instance, "_props")
@@ -135,17 +139,53 @@ function InstanceMT.__newindex(instance, key, value)
     props(instance)[key] = value
 end
 
-local function newInstance(className)
+function newInstance(className)
     local instance = setmetatable({}, InstanceMT)
     rawset(instance, "_props", { ClassName = className, Name = className })
     rawset(instance, "_children", {})
     rawset(instance, "_signals", {})
     rawset(instance, "_destroyed", false)
+
+    if className == "Part"
+        or className == "BasePart"
+        or className == "MeshPart"
+        or className == "HumanoidRootPart" then
+        props(instance).LocalTransparencyModifier = 0
+    elseif className == "Decal" then
+        props(instance).Transparency = 0
+    end
+
     return instance
 end
 
+local CLASS_PARENTS = {
+    BasePart = "PVInstance",
+    Part = "BasePart",
+    MeshPart = "BasePart",
+    HumanoidRootPart = "Part",
+    Shirt = "Clothing",
+    Pants = "Clothing",
+    ShirtGraphic = "Clothing",
+    Clothing = "Instance",
+    BodyVelocity = "BodyMover",
+    BodyGyro = "BodyMover",
+    BodyPosition = "BodyMover",
+    BodyForce = "BodyMover",
+    BodyMover = "Instance",
+    LocalScript = "Script",
+    Script = "LuaSourceContainer",
+    ModuleScript = "LuaSourceContainer",
+}
+
 function METHODS:IsA(className)
-    return props(self).ClassName == className
+    local current = props(self).ClassName
+    while current do
+        if current == className then
+            return true
+        end
+        current = CLASS_PARENTS[current]
+    end
+    return false
 end
 
 function METHODS:GetChildren()
@@ -154,6 +194,48 @@ function METHODS:GetChildren()
         snapshot[index] = child
     end
     return snapshot
+end
+
+function METHODS:GetDescendants()
+    local result = {}
+
+    for _, child in ipairs(children(self)) do
+        table.insert(result, child)
+        for _, descendant in ipairs(child:GetDescendants()) do
+            table.insert(result, descendant)
+        end
+    end
+
+    return result
+end
+
+function METHODS:Clone()
+    if props(self).__failClone then
+        error("Clone failed for " .. tostring(props(self).Name))
+    end
+
+    local copy = newInstance(props(self).ClassName)
+    for key, value in pairs(props(self)) do
+        if key ~= "Parent" then
+            props(copy)[key] = value
+        end
+    end
+
+    -- A cloned Humanoid is a client-created rig, even if the source was a
+    -- server-owned character. ApplyDescription is allowed on the clone.
+    if props(copy).ClassName == "Humanoid" then
+        props(copy)._backendOwned = false
+    end
+
+    for _, child in ipairs(children(self)) do
+        setParent(child:Clone(), copy)
+    end
+
+    return copy
+end
+
+function METHODS:PivotTo(_cframe)
+    return self
 end
 
 function METHODS:FindFirstChild(name)
@@ -356,6 +438,12 @@ function TweenService:Create(instance, _info, goal)
     }
 end
 
+RunService = newInstance("RunService")
+RunService.Parent = game
+RunService.RenderStepped = newSignal()
+RunService.Heartbeat = newSignal()
+services.RunService = RunService
+
 -- ---------------------------------------------------------------- players
 
 local ownDescription = newInstance("HumanoidDescription")
@@ -366,6 +454,14 @@ apiDescription.Name = "ApiDescription"
 
 local serverDescription = newInstance("HumanoidDescription")
 serverDescription.Name = "ServerDescription"
+
+apiDescription.HeadColor = Color3.fromRGB(220, 120, 80)
+apiDescription.TorsoColor = Color3.fromRGB(60, 120, 220)
+apiDescription.Shirt = 111
+apiDescription.Pants = 222
+apiDescription.Face = 333
+apiDescription.HeightScale = 1.1
+apiDescription.WidthScale = 0.95
 
 local PlayerGui = newInstance("PlayerGui")
 PlayerGui.Name = "PlayerGui"
@@ -378,40 +474,100 @@ LocalPlayer.Parent = Players
 Players.LocalPlayer = LocalPlayer
 PlayerGui.Parent = LocalPlayer
 
-local character = newInstance("Model")
-character.Name = "LocalTester"
-character.Parent = workspace
+local function mockCFrame(x, y, z)
+    return { Position = { X = x, Y = y, Z = z } }
+end
 
-local humanoid = newInstance("Humanoid")
-humanoid.Parent = character
+local function makeRig(name, description, backendOwned)
+    local model = newInstance("Model")
+    model.Name = name
+    model.Parent = workspace
+
+    local rigHumanoid = newInstance("Humanoid")
+    rigHumanoid.Name = "Humanoid"
+    rigHumanoid.Parent = model
+    rigHumanoid.RigType = Enum.HumanoidRigType.R15
+    rigHumanoid._backendOwned = backendOwned == true
+    rigHumanoid.__description = description
+
+    local root = newInstance("HumanoidRootPart")
+    root.Name = "HumanoidRootPart"
+    root.CFrame = mockCFrame(10, 5, 0)
+    root.Parent = model
+    rigHumanoid.RootPart = root
+
+    local torso = newInstance("BasePart")
+    torso.Name = "Torso"
+    torso.Parent = model
+
+    local head = newInstance("BasePart")
+    head.Name = "Head"
+    head.Parent = model
+
+    local neck = newInstance("Motor6D")
+    neck.Name = "Neck"
+    neck.Part0 = torso
+    neck.Part1 = head
+    neck.Transform = { Angle = 0 }
+    neck.Parent = torso
+
+    local bodyColors = newInstance("BodyColors")
+    bodyColors.Name = "BodyColors"
+    bodyColors.Parent = model
+
+    local shirt = newInstance("Shirt")
+    shirt.Name = "Shirt"
+    shirt.ShirtTemplate = "rbxassetid://1"
+    shirt.Parent = model
+
+    local face = newInstance("Decal")
+    face.Name = "Face"
+    face.Texture = "rbxassetid://2"
+    face.Parent = head
+
+    function rigHumanoid:GetAppliedDescription()
+        return self.Applied or self.__description or ownDescription
+    end
+
+    local function recordApply(self, appliedDescription)
+        self.Applied = appliedDescription
+        self.ApplyCount = (self.ApplyCount or 0) + 1
+    end
+
+    local function assertClientOwned(self, method)
+        if self._backendOwned then
+            error(("Humanoid::%s() can only be called by the backend server"):format(method))
+        end
+        if self._denyApply then
+            error("ApplyDescription is unavailable for this test rig")
+        end
+    end
+
+    function rigHumanoid:ApplyDescriptionAsync(appliedDescription)
+        assertClientOwned(self, "ApplyDescription")
+        recordApply(self, appliedDescription)
+    end
+
+    function rigHumanoid:ApplyDescriptionResetAsync(appliedDescription)
+        assertClientOwned(self, "ApplyDescriptionReset")
+        recordApply(self, appliedDescription)
+    end
+
+    function rigHumanoid:ApplyDescription(appliedDescription)
+        assertClientOwned(self, "ApplyDescription")
+        recordApply(self, appliedDescription)
+    end
+
+    function rigHumanoid:ApplyDescriptionReset(appliedDescription)
+        assertClientOwned(self, "ApplyDescriptionReset")
+        recordApply(self, appliedDescription)
+    end
+
+    return model, rigHumanoid
+end
+
+local character, humanoid = makeRig("LocalTester", ownDescription, true)
 LocalPlayer.Character = character
-
-local function recordApply(description)
-    humanoid.Applied = description
-    humanoid.ApplyCount = (humanoid.ApplyCount or 0) + 1
-end
-
-function humanoid:GetAppliedDescription()
-    return self.Applied or ownDescription
-end
-
-function humanoid:ApplyDescriptionAsync(description)
-    recordApply(description)
-end
-
-function humanoid:ApplyDescriptionResetAsync(description)
-    recordApply(description)
-end
-
-function humanoid:ApplyDescription(description)
-    recordApply(description)
-end
-
-function humanoid:ApplyDescriptionReset(description)
-    recordApply(description)
-end
-
-LocalPlayer.ClearCharacterAppearance = function() end
 
 local serverPlayer = newInstance("Player")
 serverPlayer.Name = "ServerFriend"
@@ -419,15 +575,7 @@ serverPlayer.DisplayName = "ServerFriend"
 serverPlayer.UserId = 222
 serverPlayer.Parent = Players
 
-local serverCharacter = newInstance("Model")
-serverCharacter.Parent = workspace
-
-local serverHumanoid = newInstance("Humanoid")
-serverHumanoid.Parent = serverCharacter
-serverHumanoid.GetAppliedDescription = function()
-    return serverDescription
-end
-
+local serverCharacter = makeRig("ServerFriend", serverDescription, true)
 serverPlayer.Character = serverCharacter
 
 Players.GetPlayers = function()
@@ -446,6 +594,27 @@ Players.GetHumanoidDescriptionFromUserIdAsync = function(_, userId)
         return apiDescription
     end
     error("Unknown user id: " .. tostring(userId))
+end
+
+Players.DescriptionCreateCount = 0
+Players.UserIdCreateCount = 0
+Players.LastDescriptionRigType = nil
+
+Players.CreateHumanoidModelFromDescriptionAsync = function(self, description, rigType, _verification)
+    self.DescriptionCreateCount = self.DescriptionCreateCount + 1
+    self.LastDescriptionRigType = rigType
+
+    local model, modelHumanoid = makeRig("DescriptionPreview", description, false)
+    modelHumanoid:ApplyDescriptionAsync(description)
+    return model
+end
+
+Players.CreateHumanoidModelFromUserIdAsync = function(self, userId)
+    self.UserIdCreateCount = self.UserIdCreateCount + 1
+    local description = self:GetHumanoidDescriptionFromUserIdAsync(userId)
+    local model, modelHumanoid = makeRig("UserIdPreview", description, false)
+    modelHumanoid:ApplyDescriptionAsync(description)
+    return model
 end
 
 -- --------------------------------------------------------------- executor

@@ -4,6 +4,54 @@ All notable changes to Avatar Copier are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.3.0 — 2026-10-25
+
+### Fixed
+
+- Copying an avatar no longer calls `ApplyDescription*` on the LocalPlayer's
+  real Humanoid. Roblox restricts that API to the backend server for
+  server-owned characters, which caused the reported `Humanoid::ApplyDescription()
+  can only be called by the backend server` error. Avatar Copier now builds a
+  client-only preview rig and never touches the real Humanoid.
+- Handled preview failures are now copied to the clipboard automatically. Fetch,
+  model-build, and attach failures produce a report with the target, resolved
+  user ID, avatar source, attempted methods, error, UTC timestamp, and
+  traceback. Previously only unexpected Lua errors were copied.
+- Reset and destroy now restore `LocalTransparencyModifier`, `Decal.Transparency`,
+  Humanoid display settings, and effect visibility even when the old property
+  value was unset.
+- Re-executing the script now calls the previous instance's cleanup hook, so
+  old UserInputService connections and overlay models do not leak.
+
+### Added
+
+- Client-only overlay preview built from an in-server character clone, a
+  `HumanoidDescription` model, a user-ID model, a local-rig clone with
+  `ApplyDescription`, or a partial appearance copy, in that fallback order.
+- Overlay sanitization: scripts, sounds, tools, prompts, billboards, body movers,
+  collisions, touches, raycast hits, walking, jumping, and name/health displays
+  are disabled.
+- The overlay is welded to the real `HumanoidRootPart` and mirrors matching
+  `Motor6D.Transform` values every `RenderStepped`.
+- The real character is hidden locally without changing replicated
+  `Transparency`.
+- `CharacterAdded` cleanup, stale-overlay cleanup on startup, and full teardown
+  from **Reset**, the close button, and `AvatarCopier.destroy()`.
+- Programmatic `AvatarCopier.isPreviewing()` and `AvatarCopier.getTarget()`.
+- Headless tests cover the overlay, weld, sanitization, pose mirroring, hide and
+  restore, fallback chain, partial preview, clipboard diagnostics, respawn, and
+  destroy cleanup (`119` checks per profile).
+
+### Changed
+
+- Version bumped to `1.3.0`.
+- UI footer now says `Local preview — other players can't see it.`
+- Success status is `Previewing <name> (local only)`; reset says
+  `Back to your own avatar.`
+- Cooldown now throttles every attempt, including failed lookups.
+- README and Indonesian README describe the overlay architecture, fallbacks,
+  new API members, error-report behavior, and updated limitations.
+
 ## 1.2.0 — 2026-10-25
 
 ### Added

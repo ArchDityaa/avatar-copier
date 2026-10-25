@@ -1,16 +1,17 @@
 --[[
-    Avatar Copier — v1.2.0
+    Avatar Copier — v1.3.0
     ----------------------
-    A fully client-side Roblox avatar copier for Delta Executor.
+    A fully client-side Roblox avatar previewer for Delta Executor.
 
     What it does:
-      * Reads a Roblox avatar (by username, user ID, or profile URL) and applies
-        its HumanoidDescription to YOUR OWN character.
-      * The change is applied locally only. Roblox does not replicate character
-        appearance changes made from the client, so other players keep seeing
-        your normal avatar. Nothing is sent to the game server.
-      * Copies unexpected script errors to the executor clipboard, together with
-        the version, context, and traceback, so bug reports are easy to paste.
+      * Reads a Roblox avatar (by username, user ID, or profile URL) and builds a
+        client-only overlay model that looks like that avatar.
+      * The overlay follows your character and mirrors its pose. Your real
+        character is hidden locally, so only you see the preview. Nothing is sent
+        to the game server and no server state is modified.
+      * Copies unexpected errors and failed preview attempts to the executor
+        clipboard, together with the version, context, target, and traceback, so
+        bug reports are easy to paste.
 
     What it does NOT do:
       * It does not modify other players, the game, or any server state.
@@ -25,7 +26,7 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.2.0",
+    VERSION = "1.3.0",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
     ACCENT_PRESSED = Color3.fromRGB(79, 70, 229),
@@ -80,6 +81,7 @@ local STATUS_THEMES = {
 }
 
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
@@ -89,12 +91,35 @@ if not LocalPlayer then
 end
 
 local LOG_PREFIX = "[Avatar Copier]"
+local OVERLAY_FOLDER_NAME = "AvatarCopierOverlay"
+
+-- If the script is executed again, let the previous instance disconnect its
+-- connections and remove its overlay before this one starts. The GUI cleanup
+-- below also runs, but connections and workspace models need explicit teardown.
+local function cleanupPreviousInstance()
+    if type(getgenv) ~= "function" then
+        return
+    end
+
+    local ok, env = pcall(getgenv)
+    if not ok or type(env) ~= "table" then
+        return
+    end
+
+    local cleanup = env.AvatarCopierCleanup
+    if type(cleanup) == "function" then
+        pcall(cleanup)
+    end
+end
+
+cleanupPreviousInstance()
 
 -- ------------------------------------------------------- error reporting
 
--- Unexpected errors are copied to the executor clipboard so users can paste a
--- complete report when asking for help. All clipboard work is protected: a
--- missing or broken clipboard API must never hide the original error.
+-- Errors and failed preview attempts are copied to the executor clipboard so
+-- users can paste a complete report when asking for help. All clipboard work is
+-- protected: a missing or broken clipboard API must never hide the original
+-- error, and the full report is printed to the console as a fallback.
 local MAX_CLIPBOARD_LENGTH = 8000
 local CLIPBOARD_FUNCTIONS = { "setclipboard", "toclipboard", "writeclipboard" }
 local CLIPBOARD_GLOBALS = {
@@ -130,6 +155,7 @@ local function resolveClipboard()
         end
     end
 
+    -- No usable clipboard function was exposed by this executor.
     return nil, "setclipboard, toclipboard, or writeclipboard is unavailable"
 end
 
@@ -155,7 +181,17 @@ local function copyToClipboard(text)
     return false, ("%s failed: %s"):format(name, safeToString(err))
 end
 
-local function reportError(context, err)
+local function utcTimestamp()
+    local ok, text = pcall(function()
+        return os.date("!%Y-%m-%d %H:%M:%S") .. " UTC"
+    end)
+    if ok and type(text) == "string" and text ~= "" then
+        return text
+    end
+    return "unknown time"
+end
+
+local function buildReport(context, err, details)
     local message = safeToString(err)
     local contextText = safeToString(context)
     local traceback = message
@@ -167,40 +203,66 @@ local function reportError(context, err)
         traceback = captured
     end
 
-    local timestamp = "unknown time"
-    local timeOk, timeText = pcall(function()
-        return os.date("!%Y-%m-%d %H:%M:%S") .. " UTC"
-    end)
-    if timeOk and type(timeText) == "string" and timeText ~= "" then
-        timestamp = timeText
+    local lines = {
+        ("Avatar Copier v%s - error report"):format(CONFIG.VERSION),
+        "Time: " .. utcTimestamp(),
+        "Context: " .. contextText,
+    }
+
+    if type(details) == "table" then
+        for _, line in ipairs(details) do
+            table.insert(lines, safeToString(line))
+        end
     end
 
-    local report = table.concat({
-        ("Avatar Copier v%s - error report"):format(CONFIG.VERSION),
-        "Time: " .. timestamp,
-        "Context: " .. contextText,
-        "Error: " .. message,
-        "Traceback:",
-        traceback,
-    }, "\n")
+    table.insert(lines, "Error: " .. message)
+    table.insert(lines, "Traceback:")
+    table.insert(lines, traceback)
 
+    local report = table.concat(lines, "\n")
     if #report > MAX_CLIPBOARD_LENGTH then
         report = report:sub(1, MAX_CLIPBOARD_LENGTH) .. "\n...[truncated]"
     end
 
-    pcall(warn, ("%s Unexpected error (%s): %s"):format(LOG_PREFIX, contextText, message))
+    return report
+end
 
+local function copyReport(kind, context, err, details)
+    local report = buildReport(context, err, details)
     local copied, method = copyToClipboard(report)
+
     if copied then
-        pcall(print, ("%s Error report copied to the clipboard via %s."):format(LOG_PREFIX, safeToString(method)))
-    else
-        pcall(warn, ("%s Could not copy the error report to the clipboard (%s)."):format(
+        pcall(print, ("%s %s copied to the clipboard via %s."):format(
             LOG_PREFIX,
+            kind,
             safeToString(method)
         ))
+    else
+        pcall(warn, ("%s Could not copy the %s to the clipboard (%s). Full report:"):format(
+            LOG_PREFIX,
+            string.lower(kind),
+            safeToString(method)
+        ))
+        pcall(print, report)
     end
 
-    return report
+    return report, copied, method
+end
+
+local function reportError(context, err)
+    local message = safeToString(err)
+    pcall(warn, ("%s Unexpected error (%s): %s"):format(LOG_PREFIX, safeToString(context), message))
+    return copyReport("Error report", context, err)
+end
+
+-- Used for handled technical failures (avatar fetch, model creation, attach).
+-- These are not Lua crashes, but they still produce a useful report and must be
+-- copied automatically. Plain validation errors (empty input, unknown player)
+-- stay in the status card only.
+local function reportFailure(context, err, details)
+    local message = safeToString(err)
+    pcall(warn, ("%s Preview failure (%s): %s"):format(LOG_PREFIX, safeToString(context), message))
+    return copyReport("Failure report", context, err, details)
 end
 
 local function safeCall(context, callback, ...)
@@ -218,8 +280,17 @@ end
 
 local busy = false
 local lastCopyAt = -math.huge
-local originalDescription = nil
 local destroyed = false
+
+local overlay
+local overlayFolder
+local overlayWeld
+local overlayConnection
+local overlayJoints = {}
+local hiddenInstances = {}
+local activeTarget = nil
+local apiTable = nil
+local removeOverlay
 
 local screenGui
 local window
@@ -770,7 +841,7 @@ local function buildBody(parent)
 
     local footer = makeLabel(
         parent,
-        "Client-side only — other players can't see it.",
+        "Local preview — other players can't see it.",
         UDim2.new(1, -28, 0, 14),
         UDim2.fromOffset(14, 248),
         Enum.Font.Gotham,
@@ -915,6 +986,7 @@ local function buildInterface()
             return
         end
         destroyed = true
+        removeOverlay()
         for _, connection in ipairs(connections) do
             pcall(function()
                 connection:Disconnect()
@@ -923,8 +995,17 @@ local function buildInterface()
         if screenGui then
             screenGui:Destroy()
         end
-        if type(getgenv) == "function" and getgenv().AvatarCopier then
-            getgenv().AvatarCopier = nil
+
+        if type(getgenv) == "function" then
+            local ok, env = pcall(getgenv)
+            if ok and type(env) == "table" then
+                if apiTable and env.AvatarCopier == apiTable then
+                    env.AvatarCopier = nil
+                end
+                if env.AvatarCopierCleanup == destroy then
+                    env.AvatarCopierCleanup = nil
+                end
+            end
         end
     end
 
@@ -1003,8 +1084,19 @@ local function resolveDescription(kind, value)
         if serverPlayer then
             local description = readPlayerDescription(serverPlayer)
             if description then
-                return description, "server", serverPlayer.Name
+                return description, "server", serverPlayer.Name, serverPlayer.UserId, serverPlayer
             end
+
+            -- Their character may not be loaded. We still know the ID, so use
+            -- the avatar API as a fallback while keeping the display name.
+            local ok, fetched = pcall(function()
+                return Players:GetHumanoidDescriptionFromUserIdAsync(serverPlayer.UserId)
+            end)
+            if ok and typeof(fetched) == "Instance" and fetched:IsA("HumanoidDescription") then
+                return fetched, "avatar_api", serverPlayer.Name, serverPlayer.UserId, serverPlayer
+            end
+
+            return nil, "fetch_failed", serverPlayer.Name, serverPlayer.UserId, serverPlayer
         end
 
         local ok, userId = pcall(function()
@@ -1016,14 +1108,17 @@ local function resolveDescription(kind, value)
         value = userId
     end
 
+    local userId = value
     local ok, description = pcall(function()
-        return Players:GetHumanoidDescriptionFromUserIdAsync(value)
+        return Players:GetHumanoidDescriptionFromUserIdAsync(userId)
     end)
     if ok and typeof(description) == "Instance" and description:IsA("HumanoidDescription") then
-        return description, "avatar_api"
+        return description, "avatar_api", nil, userId
     end
 
-    return nil, "fetch_failed"
+    -- The ID is valid but the description could not be fetched. A model can
+    -- still sometimes be created directly from the ID, so keep it.
+    return nil, "fetch_failed", nil, userId
 end
 
 local function getLocalHumanoid()
@@ -1052,51 +1147,636 @@ local function getLocalHumanoid()
     return humanoid
 end
 
--- Newer Clients use the *Async variants; fall back for older ones.
-local APPLY_ATTEMPTS = {
-    {
-        name = "ApplyDescriptionAsync",
-        call = function(humanoid, description)
-            return humanoid:ApplyDescriptionAsync(description, Enum.AssetTypeVerification.Default)
-        end,
-    },
-    {
-        name = "ApplyDescriptionResetAsync",
-        call = function(humanoid, description)
-            return humanoid:ApplyDescriptionResetAsync(description, Enum.AssetTypeVerification.Default)
-        end,
-    },
-    {
-        name = "ApplyDescription",
-        call = function(humanoid, description)
-            return humanoid:ApplyDescription(description, Enum.AssetTypeVerification.Default)
-        end,
-    },
-    {
-        name = "ApplyDescriptionReset",
-        call = function(humanoid, description)
-            return humanoid:ApplyDescriptionReset(description, Enum.AssetTypeVerification.Default)
-        end,
-    },
+-- ------------------------------------------------------ overlay pipeline
+
+local function ensureOverlayFolder()
+    if overlayFolder and overlayFolder.Parent == workspace then
+        return overlayFolder
+    end
+
+    if overlayFolder then
+        pcall(function()
+            overlayFolder:Destroy()
+        end)
+        overlayFolder = nil
+    end
+
+    local stale = workspace:FindFirstChild(OVERLAY_FOLDER_NAME)
+    if stale then
+        pcall(function()
+            stale:Destroy()
+        end)
+    end
+
+    local folder = Instance.new("Folder")
+    folder.Name = OVERLAY_FOLDER_NAME
+    folder.Parent = workspace
+    overlayFolder = folder
+    return folder
+end
+
+local function cloneCharacter(character)
+    if not character then
+        return nil, "character is missing"
+    end
+
+    local wasArchivable = character.Archivable
+    local ok, cloneOrError = pcall(function()
+        character.Archivable = true
+        return character:Clone()
+    end)
+
+    pcall(function()
+        character.Archivable = wasArchivable
+    end)
+
+    if ok and typeof(cloneOrError) == "Instance" then
+        return cloneOrError
+    end
+
+    return nil, cloneOrError
+end
+
+local function isValidModel(model)
+    return typeof(model) == "Instance" and model:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+local function createModelFromDescription(description, rigType)
+    if type(Players.CreateHumanoidModelFromDescriptionAsync) ~= "function" then
+        return nil, "CreateHumanoidModelFromDescriptionAsync is unavailable"
+    end
+
+    local attempts = {}
+    local function attempt(withVerification)
+        local ok, modelOrError = pcall(function()
+            if withVerification then
+                return Players:CreateHumanoidModelFromDescriptionAsync(
+                    description,
+                    rigType,
+                    Enum.AssetTypeVerification.Default
+                )
+            end
+            return Players:CreateHumanoidModelFromDescriptionAsync(description, rigType)
+        end)
+        if ok and isValidModel(modelOrError) then
+            return modelOrError
+        end
+        table.insert(attempts, safeToString(modelOrError))
+        return nil
+    end
+
+    local model = attempt(true)
+    if model then
+        return model
+    end
+
+    model = attempt(false)
+    if model then
+        return model
+    end
+
+    return nil, table.concat(attempts, " | ")
+end
+
+local function createModelFromUserId(userId)
+    if type(Players.CreateHumanoidModelFromUserIdAsync) ~= "function" then
+        return nil, "CreateHumanoidModelFromUserIdAsync is unavailable"
+    end
+
+    local ok, modelOrError = pcall(function()
+        return Players:CreateHumanoidModelFromUserIdAsync(userId)
+    end)
+    if ok and isValidModel(modelOrError) then
+        return modelOrError
+    end
+
+    return nil, modelOrError
+end
+
+-- ApplyDescription is only legal on the client when the Humanoid belongs to a
+-- rig this client created. This helper is deliberately never called with the
+-- LocalPlayer's real Humanoid.
+local APPLY_METHODS = {
+    "ApplyDescriptionAsync",
+    "ApplyDescriptionResetAsync",
+    "ApplyDescription",
+    "ApplyDescriptionReset",
 }
 
-local function applyLocally(humanoid, description)
+local function applyDescriptionToClone(model, description)
     if not (typeof(description) == "Instance" and description:IsA("HumanoidDescription")) then
         return false, "Invalid HumanoidDescription"
     end
 
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return false, "The cloned model has no Humanoid"
+    end
+
     local errors = {}
-    for _, attempt in ipairs(APPLY_ATTEMPTS) do
-        if type(humanoid[attempt.name]) == "function" then
-            local ok, err = pcall(attempt.call, humanoid, description)
+    for _, methodName in ipairs(APPLY_METHODS) do
+        local method = humanoid[methodName]
+        if type(method) == "function" then
+            local ok, err = pcall(function()
+                return method(humanoid, description, Enum.AssetTypeVerification.Default)
+            end)
             if ok then
-                return true, attempt.name
+                return true, methodName
             end
-            table.insert(errors, attempt.name .. ": " .. tostring(err))
+            table.insert(errors, methodName .. ": " .. safeToString(err))
         end
     end
 
     return false, table.concat(errors, " | ")
+end
+
+local function applyPartialAppearance(model, description)
+    if not (typeof(description) == "Instance" and description:IsA("HumanoidDescription")) then
+        return false, "Invalid HumanoidDescription"
+    end
+
+    local changes = 0
+    local errors = {}
+
+    local bodyColors = model:FindFirstChild("BodyColors")
+    if not bodyColors then
+        bodyColors = Instance.new("BodyColors")
+        bodyColors.Parent = model
+    end
+
+    local colorMap = {
+        HeadColor = "HeadColor3",
+        TorsoColor = "TorsoColor3",
+        LeftArmColor = "LeftArmColor3",
+        RightArmColor = "RightArmColor3",
+        LeftLegColor = "LeftLegColor3",
+        RightLegColor = "RightLegColor3",
+    }
+
+    for descriptionProperty, bodyProperty in pairs(colorMap) do
+        local value = description[descriptionProperty]
+        if value ~= nil then
+            local ok, err = pcall(function()
+                bodyColors[bodyProperty] = value
+            end)
+            if ok then
+                changes = changes + 1
+            else
+                table.insert(errors, bodyProperty .. ": " .. safeToString(err))
+            end
+        end
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local scaleMap = {
+        HeightScale = "BodyHeightScale",
+        WidthScale = "BodyWidthScale",
+        BodyDepthScale = "BodyDepthScale",
+        HeadScale = "HeadScale",
+        BodyTypeScale = "BodyTypeScale",
+        ProportionScale = "ProportionScale",
+    }
+
+    if humanoid then
+        for descriptionProperty, humanoidProperty in pairs(scaleMap) do
+            local value = description[descriptionProperty]
+            if type(value) == "number" then
+                local ok, err = pcall(function()
+                    humanoid[humanoidProperty] = value
+                end)
+                if ok then
+                    changes = changes + 1
+                else
+                    table.insert(errors, humanoidProperty .. ": " .. safeToString(err))
+                end
+            end
+        end
+    end
+
+    local clothing = {
+        { className = "Shirt", descriptionProperty = "Shirt", templateProperty = "ShirtTemplate" },
+        { className = "Pants", descriptionProperty = "Pants", templateProperty = "PantsTemplate" },
+        { className = "ShirtGraphic", descriptionProperty = "GraphicTShirt", templateProperty = "Graphic" },
+    }
+
+    for _, item in ipairs(clothing) do
+        local existing = model:FindFirstChildOfClass(item.className)
+        if existing then
+            existing:Destroy()
+        end
+
+        local assetId = description[item.descriptionProperty]
+        if type(assetId) == "number" and assetId > 0 then
+            local clothingInstance = Instance.new(item.className)
+            clothingInstance[item.templateProperty] = "rbxassetid://" .. tostring(assetId)
+            clothingInstance.Parent = model
+            changes = changes + 1
+        end
+    end
+
+    local head = model:FindFirstChild("Head")
+    local faceId = description.Face
+    if head and type(faceId) == "number" and faceId > 0 then
+        for _, child in ipairs(head:GetChildren()) do
+            if child:IsA("Decal") and child.Name == "Face" then
+                child:Destroy()
+            end
+        end
+
+        local face = Instance.new("Decal")
+        face.Name = "Face"
+        face.Texture = "rbxassetid://" .. tostring(faceId)
+        face.Parent = head
+        changes = changes + 1
+    end
+
+    if changes == 0 then
+        local detail = "no usable appearance fields"
+        if #errors > 0 then
+            detail = detail .. ": " .. table.concat(errors, " | ")
+        end
+        return false, detail
+    end
+
+    return true, ("%d partial properties applied"):format(changes)
+end
+
+local function buildOverlayModel(target, localHumanoid)
+    local errors = {}
+    local function addError(label, err)
+        table.insert(errors, label .. ": " .. safeToString(err))
+    end
+
+    local rigType = localHumanoid.RigType or Enum.HumanoidRigType.R15
+
+    -- 1. Clone the target's live character when they are in this server. This
+    --    preserves game-specific bodies, accessories, and scaling exactly.
+    if target.sourcePlayer then
+        local sourceCharacter = target.sourcePlayer.Character
+        if sourceCharacter then
+            local clone, err = cloneCharacter(sourceCharacter)
+            if clone then
+                return clone, "in-server character clone", errors, false
+            end
+            addError("in-server character clone", err)
+        else
+            addError("in-server character clone", "target character is not loaded")
+        end
+    end
+
+    -- 2. Ask Roblox to build the avatar from the fetched description.
+    if target.description then
+        local model, err = createModelFromDescription(target.description, rigType)
+        if model then
+            return model, "CreateHumanoidModelFromDescriptionAsync", errors, false
+        end
+        addError("CreateHumanoidModelFromDescriptionAsync", err)
+    end
+
+    -- 3. Build it directly from the user ID.
+    if target.userId then
+        local model, err = createModelFromUserId(target.userId)
+        if model then
+            return model, "CreateHumanoidModelFromUserIdAsync", errors, false
+        end
+        addError("CreateHumanoidModelFromUserIdAsync", err)
+    end
+
+    -- 4. Clone the local character (a client-created rig) and apply the
+    --    description to the clone. This is allowed because the clone only
+    --    exists on this client.
+    if target.description then
+        local clone, err = cloneCharacter(LocalPlayer.Character)
+        if clone then
+            ensureOverlayFolder()
+            clone.Parent = overlayFolder
+
+            local applied, applyDetail = applyDescriptionToClone(clone, target.description)
+            if applied then
+                return clone, "local character clone + " .. applyDetail, errors, false
+            end
+            addError("local character clone + ApplyDescription", applyDetail)
+
+            -- 5. Last resort: copy the description's colours, scale, clothing,
+            --    and face onto the local clone. This is a partial preview.
+            local partial, partialDetail = applyPartialAppearance(clone, target.description)
+            if partial then
+                return clone, "local character clone + partial appearance", errors, true
+            end
+            addError("local character clone + partial appearance", partialDetail)
+
+            pcall(function()
+                clone:Destroy()
+            end)
+        else
+            addError("local character clone", err)
+        end
+    end
+
+    return nil, nil, errors, false
+end
+
+local function sanitizeOverlay(model)
+    for _, descendant in ipairs(model:GetDescendants()) do
+        if descendant:IsA("Script")
+            or descendant:IsA("LocalScript")
+            or descendant:IsA("ModuleScript")
+            or descendant:IsA("Sound")
+            or descendant:IsA("Tool")
+            or descendant:IsA("ClickDetector")
+            or descendant:IsA("ProximityPrompt")
+            or descendant:IsA("BillboardGui")
+            or descendant:IsA("BodyMover") then
+            pcall(function()
+                descendant:Destroy()
+            end)
+        elseif descendant:IsA("BasePart") then
+            pcall(function()
+                descendant.CanCollide = false
+                descendant.CanTouch = false
+                descendant.CanQuery = false
+                descendant.Massless = true
+                descendant.Anchored = false
+            end)
+        end
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        pcall(function()
+            humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+        end)
+        pcall(function()
+            humanoid.NameDisplayDistance = 0
+        end)
+        pcall(function()
+            humanoid.HealthDisplayDistance = 0
+        end)
+        pcall(function()
+            humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+        end)
+        pcall(function()
+            humanoid.WalkSpeed = 0
+        end)
+        pcall(function()
+            humanoid.JumpPower = 0
+        end)
+        pcall(function()
+            humanoid.AutoRotate = false
+        end)
+        pcall(function()
+            humanoid.PlatformStand = true
+        end)
+    end
+
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if root then
+        model.PrimaryPart = root
+        pcall(function()
+            root.Anchored = false
+        end)
+    end
+
+    model.Name = "AvatarCopierPreview"
+    model.Archivable = false
+    return model
+end
+
+local function rememberHidden(instance, property, value, defaultValue)
+    local ok, oldValue = pcall(function()
+        return instance[property]
+    end)
+    if not ok then
+        return
+    end
+
+    -- Roblox can expose unset properties as nil in some contexts. Keep a
+    -- sensible default so reset always restores a usable value instead of
+    -- leaving LocalTransparencyModifier/Transparency stuck at the hidden value.
+    if oldValue == nil then
+        oldValue = defaultValue
+    end
+    if oldValue == nil then
+        return
+    end
+
+    table.insert(hiddenInstances, {
+        instance = instance,
+        property = property,
+        value = oldValue,
+    })
+
+    pcall(function()
+        instance[property] = value
+    end)
+end
+
+local restoreLocalCharacter
+
+local function hideLocalCharacter(character)
+    restoreLocalCharacter()
+
+    if not character then
+        return
+    end
+
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            rememberHidden(descendant, "LocalTransparencyModifier", 1, 0)
+        elseif descendant:IsA("Decal") then
+            rememberHidden(descendant, "Transparency", 1, 0)
+        elseif descendant:IsA("BillboardGui")
+            or descendant:IsA("Highlight")
+            or descendant:IsA("ParticleEmitter")
+            or descendant:IsA("Trail")
+            or descendant:IsA("Beam")
+            or descendant:IsA("Fire")
+            or descendant:IsA("Smoke")
+            or descendant:IsA("Sparkles") then
+            rememberHidden(descendant, "Enabled", false, true)
+        end
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        rememberHidden(
+            humanoid,
+            "DisplayDistanceType",
+            Enum.HumanoidDisplayDistanceType.None,
+            Enum.HumanoidDisplayDistanceType.Viewer
+        )
+        rememberHidden(humanoid, "NameDisplayDistance", 0, 100)
+        rememberHidden(humanoid, "HealthDisplayDistance", 0, 100)
+        rememberHidden(
+            humanoid,
+            "HealthDisplayType",
+            Enum.HumanoidHealthDisplayType.AlwaysOff,
+            Enum.HumanoidHealthDisplayType.DisplayWhenDamaged
+        )
+    end
+end
+
+function restoreLocalCharacter()
+    for index = #hiddenInstances, 1, -1 do
+        local entry = hiddenInstances[index]
+        pcall(function()
+            if entry.instance.Parent then
+                entry.instance[entry.property] = entry.value
+            end
+        end)
+    end
+    hiddenInstances = {}
+end
+
+local function normalizeJointName(name)
+    return (tostring(name):lower():gsub("[%s_%-]", ""))
+end
+
+local function collectJoints(character)
+    local byName = {}
+    local byParts = {}
+
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant:IsA("Motor6D") then
+            byName[normalizeJointName(descendant.Name)] = descendant
+
+            local part0 = descendant.Part0 and descendant.Part0.Name or ""
+            local part1 = descendant.Part1 and descendant.Part1.Name or ""
+            byParts[normalizeJointName(part0) .. "|" .. normalizeJointName(part1)] = descendant
+        end
+    end
+
+    return byName, byParts
+end
+
+local function buildPoseMap(sourceCharacter)
+    local sourceByName, sourceByParts = collectJoints(sourceCharacter)
+    local map = {}
+
+    for _, descendant in ipairs(overlay:GetDescendants()) do
+        if descendant:IsA("Motor6D") then
+            local source = sourceByName[normalizeJointName(descendant.Name)]
+
+            if not source then
+                local part0 = descendant.Part0 and descendant.Part0.Name or ""
+                local part1 = descendant.Part1 and descendant.Part1.Name or ""
+                source = sourceByParts[normalizeJointName(part0) .. "|" .. normalizeJointName(part1)]
+            end
+
+            if source then
+                table.insert(map, { overlayJoint = descendant, sourceJoint = source })
+            end
+        end
+    end
+
+    overlayJoints = map
+end
+
+local function mirrorPose()
+    for _, joint in ipairs(overlayJoints) do
+        local source = joint.sourceJoint
+        local target = joint.overlayJoint
+        if source.Parent and target.Parent then
+            target.Transform = source.Transform
+        end
+    end
+end
+
+local function attachOverlay(model, localHumanoid, localCharacter)
+    local overlayHumanoid = model:FindFirstChildOfClass("Humanoid")
+    local overlayRoot = model:FindFirstChild("HumanoidRootPart")
+        or (overlayHumanoid and overlayHumanoid.RootPart)
+    local sourceRoot = localCharacter:FindFirstChild("HumanoidRootPart")
+        or (localHumanoid and localHumanoid.RootPart)
+
+    if not overlayRoot then
+        return false, "the preview model has no HumanoidRootPart"
+    end
+    if not sourceRoot then
+        return false, "your character has no HumanoidRootPart"
+    end
+
+    local folder = ensureOverlayFolder()
+    if model.Parent ~= folder then
+        model.Parent = folder
+    end
+
+    pcall(function()
+        model:PivotTo(sourceRoot.CFrame)
+    end)
+    overlayRoot.CFrame = sourceRoot.CFrame
+
+    local weld = Instance.new("WeldConstraint")
+    weld.Name = "AvatarCopierWeld"
+    weld.Part0 = sourceRoot
+    weld.Part1 = overlayRoot
+    weld.Parent = overlayRoot
+
+    overlay = model
+    overlayWeld = weld
+    hideLocalCharacter(localCharacter)
+    buildPoseMap(localCharacter)
+
+    local connection
+    connection = RunService.RenderStepped:Connect(function()
+        local ok = pcall(mirrorPose)
+        if not ok then
+            pcall(function()
+                connection:Disconnect()
+            end)
+            if overlayConnection == connection then
+                overlayConnection = nil
+            end
+        end
+    end)
+    overlayConnection = connection
+
+    return true
+end
+
+function removeOverlay()
+    if overlayConnection then
+        pcall(function()
+            overlayConnection:Disconnect()
+        end)
+        overlayConnection = nil
+    end
+
+    overlayJoints = {}
+
+    if overlayWeld then
+        pcall(function()
+            overlayWeld:Destroy()
+        end)
+        overlayWeld = nil
+    end
+
+    if overlay then
+        pcall(function()
+            overlay:Destroy()
+        end)
+        overlay = nil
+    end
+
+    local folder = overlayFolder
+    if not folder then
+        local ok, stale = pcall(function()
+            return workspace:FindFirstChild(OVERLAY_FOLDER_NAME)
+        end)
+        if ok then
+            folder = stale
+        end
+    end
+
+    if folder then
+        pcall(function()
+            folder:Destroy()
+        end)
+    end
+    overlayFolder = nil
+
+    restoreLocalCharacter()
+    activeTarget = nil
 end
 
 local function copyAvatar(rawTarget)
@@ -1119,18 +1799,26 @@ local function copyAvatar(rawTarget)
     end
 
     local displayTarget = tostring(value)
+    lastCopyAt = os.clock()
 
     setBusy(true)
     setStatus("Resolving avatar...", "loading")
 
-    local description, source, resolvedName = resolveDescription(kind, value)
+    local description, source, resolvedName, userId, sourcePlayer = resolveDescription(kind, value)
 
     if destroyed then
         busy = false
         return false, "Interface is closed."
     end
 
-    if not description then
+    local label = resolvedName or displayTarget
+    local details = {
+        "Target: " .. label,
+        "Resolved user ID: " .. tostring(userId or "unknown"),
+        "Avatar source: " .. tostring(source),
+    }
+
+    if not description and not userId then
         setBusy(false)
 
         if source == "not_found" then
@@ -1138,14 +1826,19 @@ local function copyAvatar(rawTarget)
             return false, "Player not found."
         end
 
-        setStatus("Could not load that avatar (invalid ID, private, or rate-limited).", "error")
+        local copied = reportFailure("copy/fetch", "Could not fetch an avatar description.", details)
+        setStatus(
+            copied
+                and "Could not load that avatar. Error details copied to clipboard."
+                or "Could not load that avatar. See the console for details.",
+            "error"
+        )
         return false, "Avatar fetch failed."
     end
 
-    local label = resolvedName or displayTarget
-
     local humanoid = getLocalHumanoid()
-    if not humanoid then
+    local character = LocalPlayer.Character
+    if not humanoid or not character then
         setBusy(false)
         setStatus("Your character is not ready yet.", "error")
         return false, "Character not ready."
@@ -1156,30 +1849,100 @@ local function copyAvatar(rawTarget)
         return false, "Interface is closed."
     end
 
-    -- Snapshot the player's original look once, for the Reset button.
-    if not originalDescription then
-        local ok, snapshot = pcall(function()
-            return humanoid:GetAppliedDescription()
-        end)
-        if ok then
-            originalDescription = snapshot
+    setStatus("Building avatar preview...", "loading")
+    removeOverlay()
+
+    local model, method, buildErrors, partial = buildOverlayModel({
+        description = description,
+        userId = userId,
+        sourcePlayer = sourcePlayer,
+    }, humanoid)
+
+    if destroyed then
+        if model then
+            pcall(function()
+                model:Destroy()
+            end)
         end
+        removeOverlay()
+        busy = false
+        return false, "Interface is closed."
     end
 
-    setStatus("Applying avatar locally...", "loading")
-    local ok, detail = applyLocally(humanoid, description)
+    if not model then
+        setBusy(false)
+        local buildDetails = {}
+        for _, line in ipairs(details) do
+            table.insert(buildDetails, line)
+        end
+        for _, line in ipairs(buildErrors) do
+            table.insert(buildDetails, "Attempt: " .. line)
+        end
+
+        local copied = reportFailure(
+            "copy/build",
+            "All local avatar preview methods failed.",
+            buildDetails
+        )
+        setStatus(
+            copied
+                and "Preview failed. Error details copied to clipboard."
+                or "Preview failed. See the console for details.",
+            "error"
+        )
+        return false, "Preview build failed."
+    end
+
+    sanitizeOverlay(model)
+    local attachOk, attached, attachError = pcall(attachOverlay, model, humanoid, character)
+    if not attachOk then
+        attachError = attached
+        attached = false
+    end
+
+    if destroyed then
+        pcall(function()
+            model:Destroy()
+        end)
+        removeOverlay()
+        busy = false
+        return false, "Interface is closed."
+    end
+
+    if not attached then
+        pcall(function()
+            model:Destroy()
+        end)
+        removeOverlay()
+        setBusy(false)
+        table.insert(details, "Build method: " .. tostring(method))
+        local copied = reportFailure("copy/attach", attachError, details)
+        setStatus(
+            copied
+                and "Could not attach the preview. Error details copied to clipboard."
+                or "Could not attach the preview. See the console for details.",
+            "error"
+        )
+        return false, "Preview attach failed."
+    end
+
+    activeTarget = {
+        name = label,
+        userId = userId,
+        description = description,
+        source = source,
+        method = method,
+    }
 
     setBusy(false)
 
-    if ok then
-        lastCopyAt = os.clock()
-        setStatus(("Copied from %s (local only)"):format(label), "success")
-        return true, "Avatar applied via " .. tostring(detail)
+    if partial then
+        setStatus(("Partial preview of %s (local only)"):format(label), "warning")
+        return true, "Partial local preview via " .. tostring(method)
     end
 
-    warn(("%s Failed to apply description: %s"):format(LOG_PREFIX, tostring(detail)))
-    setStatus("Failed to apply. Try another avatar or rejoin.", "error")
-    return false, "Apply failed."
+    setStatus(("Previewing %s (local only)"):format(label), "success")
+    return true, "Local preview via " .. tostring(method)
 end
 
 local function resetAvatar()
@@ -1191,33 +1954,22 @@ local function resetAvatar()
         return false, "A copy is already in progress."
     end
 
-    local humanoid = getLocalHumanoid()
-    if not humanoid then
-        setStatus("Your character is not ready yet.", "error")
-        return false, "Character not ready."
+    local hadPreview = overlay ~= nil or activeTarget ~= nil or #hiddenInstances > 0
+    removeOverlay()
+
+    if hadPreview then
+        setStatus("Back to your own avatar.", "success")
+        return true, "Your own avatar restored."
     end
 
-    if originalDescription then
-        local ok = applyLocally(humanoid, originalDescription)
-        if ok then
-            setStatus("Restored your own avatar.", "success")
-            return true, "Original avatar restored."
-        end
-    end
-
-    local ok = pcall(function()
-        LocalPlayer:ClearCharacterAppearance()
-    end)
-    if ok then
-        setStatus("Restored your own avatar.", "success")
-        return true, "Appearance cleared."
-    end
-
-    setStatus("Could not restore your avatar.", "error")
-    return false, "Reset failed."
+    setStatus("Nothing to reset — you're already using your own avatar.", "idle")
+    return false, "No preview active."
 end
 
 -- ------------------------------------------------------------- startup
+
+-- Remove a stale overlay left behind if a previous execution was interrupted.
+removeOverlay()
 
 local buildOk, buildResult = xpcall(buildInterface, function(err)
     return reportError("startup/build", err)
@@ -1266,10 +2018,25 @@ local function start()
         end
     end))
 
+    track(LocalPlayer.CharacterAdded:Connect(function()
+        safeCall("character respawn", function()
+            if destroyed then
+                return
+            end
+
+            if overlay then
+                removeOverlay()
+                setStatus("Character respawned. Copy the avatar again.", "warning")
+            else
+                restoreLocalCharacter()
+            end
+        end)
+    end))
+
     -- Programmatic API for power users:
     --   AvatarCopier.copy("Roblox")   AvatarCopier.reset()   AvatarCopier.destroy()
     if type(getgenv) == "function" then
-        getgenv().AvatarCopier = {
+        local api = {
             version = CONFIG.VERSION,
             copy = function(target)
                 runSafely("AvatarCopier.copy", copyAvatar, target)
@@ -1280,10 +2047,27 @@ local function start()
             destroy = function()
                 safeCall("AvatarCopier.destroy", destroyInterface)
             end,
+            isPreviewing = function()
+                return overlay ~= nil
+            end,
+            getTarget = function()
+                if not activeTarget then
+                    return nil
+                end
+                return {
+                    name = activeTarget.name,
+                    userId = activeTarget.userId,
+                    source = activeTarget.source,
+                }
+            end,
         }
+
+        apiTable = api
+        getgenv().AvatarCopier = api
+        getgenv().AvatarCopierCleanup = destroyInterface
     end
 
-    print(("%s v%s loaded. Client-side only."):format(LOG_PREFIX, CONFIG.VERSION))
+    print(("%s v%s loaded. Client-side local preview."):format(LOG_PREFIX, CONFIG.VERSION))
 end
 
 local startOk = safeCall("startup", start)

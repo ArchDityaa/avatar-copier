@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Version](https://img.shields.io/badge/version-1.2.0-6366f1)
+![Version](https://img.shields.io/badge/version-1.3.0-6366f1)
 ![Tests](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -15,9 +15,9 @@
 
 ## Why Avatar Copier
 
-Type a **username**, **user ID**, or **Roblox profile URL** into a small draggable window and press **Copy avatar**. The script fetches that player's `HumanoidDescription` and applies it to your own character locally.
+Type a **username**, **user ID**, or **Roblox profile URL** into a small draggable window and press **Copy avatar**. Avatar Copier builds that avatar as a **client-only preview rig**, hides your real character on your screen, and makes the preview follow your movement and pose.
 
-Roblox does not replicate character appearance changes made from the client, so **only you see the new avatar**. Other players still see your normal look. No server state is touched, nothing is sent to a third party, and no player is affected.
+Roblox does not replicate client-created models, so **only you see the preview**. Other players still see your normal character. No server state is touched, nothing is sent to a third party, and no player is affected.
 
 ## Features
 
@@ -26,11 +26,13 @@ Roblox does not replicate character appearance changes made from the client, so 
 | Copy by username | e.g. `Roblox` |
 | Copy by user ID | e.g. `1` |
 | Copy by profile URL | e.g. `https://www.roblox.com/users/1/profile` |
-| In-server fast path | Instantly reuses the target's live description when they are in the same server |
-| Reset button | Restores your original appearance |
+| In-server fast path | Clones the target's live character when they are in the same server for the highest fidelity |
+| Local overlay preview | Weld-mounted preview rig follows your position and mirrors your joint poses |
+| Multiple build fallbacks | Description API → user-ID API → local-rig clone → partial appearance copy |
+| Reset button | Removes the overlay and reveals your real character again |
 | Clear input | One tap to start over |
 | Status card | Colour-coded feedback for loading, success, warnings, and errors |
-| Automatic error reports | Unexpected Lua errors are copied to your clipboard with a full traceback |
+| Automatic error reports | Unexpected errors **and failed preview attempts** are copied to your clipboard with a full traceback |
 | Responsive window | Automatically scales down on smaller screens |
 | Draggable GUI | Minimal dark window, stays out of the way |
 | Client-side only | No server changes, no advantage, no third-party requests |
@@ -65,6 +67,8 @@ No key system, no configuration file, and no external asset dependency.
 - `setclipboard`, `toclipboard`, or `writeclipboard` is recommended for automatic error reports; without one, reports are printed to the console
 - An R15 avatar is recommended (most modern games); see [Limitations](#limitations)
 
+The preview rig is created entirely on your client. The script never calls `ApplyDescription` on your real character; that engine API is restricted to the backend server for server-owned characters.
+
 ## Compatibility
 
 | Environment | Status | Notes |
@@ -74,17 +78,20 @@ No key system, no configuration file, and no external asset dependency.
 | Error clipboard | Supported | Uses `setclipboard`, `toclipboard`, or `writeclipboard`; falls back to the console |
 | PC | Supported | Desktop attaches to `gethui` → `CoreGui` → `PlayerGui` |
 | Mobile | Supported | Attaches to `PlayerGui` first, where mobile executors are more reliable |
-| R15 avatars | Best | Full `HumanoidDescription` support |
-| R6 avatars | Partial | Body colours and clothing usually apply; some meshes and accessories may not map |
-| Custom avatar games | Partial | Games that overwrite appearance on spawn may revert your change |
+| R15 avatars | Best | Full description/model support and joint-pose mirroring |
+| R6 avatars | Partial | The local fallback can copy body colours and clothing; R6/R15 joints only partially match |
+| Custom avatar games | Partial | A local rig may not reproduce game-specific bodies; in-server targets are cloned when possible |
+| Executor asset APIs | Varies | If Roblox asset/model APIs are blocked, the script falls back to cloning your client-only rig |
 
 ## Usage
 
 1. A small window titled **Avatar Copier** appears on screen.
 2. Enter a username, user ID, or profile URL.
 3. Press **Copy avatar** (or hit `Enter`).
-4. Wait for the status card: `Copied from <name> (local only)`.
-5. Press **Reset** to go back to your own avatar, or close the window with `×`.
+4. Wait for the status card: `Previewing <name> (local only)`.
+5. Press **Reset** to remove the preview and reveal your own avatar, or close the window with `×`.
+
+The overlay follows your position and mirrors your current joint poses every frame. It does not copy the target's custom animation scripts, and it exists only on your client.
 
 | Action | Input |
 | --- | --- |
@@ -100,17 +107,21 @@ The script exposes a small API through `getgenv()`:
 ```lua
 AvatarCopier.copy("Roblox")    -- copy by username / ID / URL
 AvatarCopier.copy(1)           -- numeric user ID
-AvatarCopier.reset()           -- restore your original look
+AvatarCopier.reset()           -- remove the preview
 AvatarCopier.destroy()         -- close the window
-print(AvatarCopier.version)    -- "1.2.0"
+print(AvatarCopier.version)    -- "1.3.0"
+print(AvatarCopier.isPreviewing())
+print(AvatarCopier.getTarget())
 ```
 
 | Member | Description |
 | --- | --- |
-| `AvatarCopier.copy(target)` | Starts a copy in the background. Progress and errors appear in the UI. |
-| `AvatarCopier.reset()` | Restores the snapshot taken before your first copy, or clears the appearance. |
-| `AvatarCopier.destroy()` | Removes the GUI and clears the global API. |
-| `AvatarCopier.version` | Current version string (`"1.2.0"`). |
+| `AvatarCopier.copy(target)` | Starts building a local preview in the background. Progress and errors appear in the UI. |
+| `AvatarCopier.reset()` | Removes the overlay and restores your real character's visibility. |
+| `AvatarCopier.destroy()` | Removes the GUI and overlay, then clears the global API. |
+| `AvatarCopier.isPreviewing()` | Returns `true` while a preview overlay is active. |
+| `AvatarCopier.getTarget()` | Returns `{ name, userId, source }` for the active preview, or `nil`. |
+| `AvatarCopier.version` | Current version string (`"1.3.0"`). |
 
 `copy` and `reset` are fire-and-forget: they spawn a task and return immediately. Read the status card for the result.
 
@@ -119,7 +130,7 @@ print(AvatarCopier.version)    -- "1.2.0"
 If an unexpected Luau error happens — during startup, a button handler, the copy/reset pipeline, or an API call — Avatar Copier catches it and builds a compact report:
 
 ```text
-Avatar Copier v1.2.0 - error report
+Avatar Copier v1.3.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy button
 Error: <error message>
@@ -127,43 +138,71 @@ Traceback:
 <stack trace>
 ```
 
-The report is copied to your device clipboard through `setclipboard`, `toclipboard`, or `writeclipboard` (whichever the executor provides), and the status card changes to **Unexpected error. Details copied to clipboard.** The console also confirms the copy.
+Handled failures also produce a report. If every preview-build method fails, the report includes the target, resolved user ID, avatar source, each attempted method, and its error:
 
-Validation results such as `Player not found` or `Could not load that avatar` are normal UI feedback, not crashes, so they do not overwrite your clipboard. If no clipboard function is available, the report is printed to the console and a warning explains why it could not be copied. Nothing is uploaded anywhere.
+```text
+Avatar Copier v1.3.0 - error report
+Time: 2026-10-25 12:34:56 UTC
+Context: copy/build
+Target: Roblox
+Resolved user ID: 1
+Avatar source: avatar_api
+Attempt: CreateHumanoidModelFromDescriptionAsync: <error>
+Attempt: CreateHumanoidModelFromUserIdAsync: <error>
+Error: All local avatar preview methods failed.
+Traceback:
+<stack trace>
+```
+
+Reports are copied to your device clipboard through `setclipboard`, `toclipboard`, or `writeclipboard` (whichever the executor provides). The status card says **Error details copied to clipboard.** and the console confirms the copy. This is the fix for apply failures that previously only appeared as a warning.
+
+Validation results such as `Player not found` or an empty input are normal UI feedback, not crashes, so they do not overwrite your clipboard. If no clipboard function is available, the report is printed to the console and a warning explains why it could not be copied. Nothing is uploaded anywhere.
 
 ## How it works
 
 ```mermaid
 flowchart TD
     A[Target: username, user ID, or URL] --> B{Name matches a player in this server?}
-    B -- Yes --> C[Read their live HumanoidDescription]
-    B -- No --> D{Name or numeric ID?}
-    D -- Name --> E[Players:GetUserIdFromNameAsync]
-    D -- ID --> F[Use the ID directly]
-    E --> G[Players:GetHumanoidDescriptionFromUserIdAsync]
-    F --> G
-    C --> H[ApplyDescriptionAsync on your Humanoid]
-    G --> H
-    H --> I[Visible on your client only]
+    B -- Yes --> C[Clone their live character]
+    B -- No --> D[Resolve user ID and fetch HumanoidDescription]
+    D --> E[CreateHumanoidModelFromDescriptionAsync]
+    E -- fails --> F[CreateHumanoidModelFromUserIdAsync]
+    F -- fails --> G[Clone your client-only rig + ApplyDescription]
+    G -- fails --> H[Clone your rig + partial appearance fields]
+    C --> I[Sanitize overlay model]
+    E --> I
+    F --> I
+    G --> I
+    H --> I
+    I --> J[Weld to your HumanoidRootPart and mirror poses]
+    J --> K[Hide your real character locally]
+    K --> L[Visible on your client only]
 ```
 
 1. **Resolve the target**
-   - If the user is in the same server, their live `Humanoid:GetAppliedDescription()` is reused — instant and API-free.
-   - Otherwise the script calls `Players:GetUserIdFromNameAsync` (for usernames) and then `Players:GetHumanoidDescriptionFromUserIdAsync`.
-2. **Apply locally**
-   - The description is applied to *your* `Humanoid` with `ApplyDescriptionAsync` (with safe fallbacks to older variants).
-   - Client-side appearance changes are never replicated, so other players are unaffected.
-3. **Restore**
-   - The first time you copy, your original description is snapshotted. **Reset** re-applies it.
+   - If the user is in the same server, their live character is cloned first — instant, API-free, and preserves game-specific bodies and accessories.
+   - Otherwise the script resolves the user ID, then fetches a `HumanoidDescription`.
+2. **Build a client-only preview rig**
+   - Preferred: `Players:CreateHumanoidModelFromDescriptionAsync` using your rig type.
+   - Then: `Players:CreateHumanoidModelFromUserIdAsync`.
+   - Then: clone your own character (a client-created rig) and apply the description to the clone.
+   - Last: clone your rig and copy body colours, scale, clothing, and face directly, labelled as a partial preview.
+   - The engine only allows `ApplyDescription` on the client for Humanoids created by that client, so the real character's Humanoid is never used.
+3. **Attach and follow**
+   - The model is sanitized (no scripts, collisions, touches, or raycast hits), parented under `workspace.AvatarCopierOverlay`, and welded to your `HumanoidRootPart`.
+   - Every `RenderStepped`, matching `Motor6D` joints copy your current pose.
+   - Your real character is hidden locally with `LocalTransparencyModifier` and related client-only properties. Replicated `Transparency` is not changed.
+4. **Restore**
+   - **Reset** disconnects the pose mirror, destroys the weld and overlay, and restores every hidden property. Your real character was never modified on the server.
 
-Only `Players`, `UserInputService`, and `TweenService` are used as services. There is no HTTP call to any third-party service, no webhook, and no data collection.
+`Players`, `RunService`, `UserInputService`, `TweenService`, and `CoreGui` are the only services used. There is no HTTP call to any third-party service, no webhook, and no data collection.
 
 ## Privacy and safety
 
 - **No third-party requests.** Avatar data comes from Roblox's own `Players` API.
 - **Nothing is uploaded.** There is no analytics, telemetry, webhook, or config server.
 - **Error reports stay local.** Crash details are written only to your own clipboard (and the console); they are never transmitted.
-- **Client-side only.** Appearance changes are not replicated to the server or other players.
+- **Client-side only.** The overlay and the hidden-character state exist only on your client and are never replicated.
 - **No advantage.** The tool is a personal preview, not a disguise or exploit.
 - **Open source.** The entire script is one readable Luau file.
 
@@ -171,13 +210,15 @@ Only `Players`, `UserInputService`, and `TweenService` are used as services. The
 
 ## Limitations
 
-- **R6 games / R6 avatars** — mesh and accessory parts may not map perfectly; body colours and clothing usually do.
-- **Custom avatar systems** — games that overwrite `HumanoidDescription` on spawn or render avatars through their own system may revert your change.
-- **Private / moderated avatars** — Roblox may refuse to return a description; the status card will say the avatar could not be loaded.
-- **Rate limits** — repeated lookups can be throttled by Roblox. The script enforces a 1.5-second cooldown after a successful copy; if you still get throttled, wait a few seconds.
-- **Respawn / rejoin** — local appearance resets, just run the script again.
-- **Other players' view** — by design, they never see the copied avatar. This tool is a personal preview, not a disguise.
-- **Game-specific animation overrides** — some games force their own animation packs or accessory rules after spawn.
+- **R6 games / R6 avatars** — mesh, accessory, and joint mappings may not match perfectly; body colours and clothing usually do.
+- **Custom avatar systems** — games with non-standard bodies may not be reproducible through the public avatar APIs. In-server cloning helps, but game scripts can still interfere.
+- **Private / moderated avatars** — Roblox may refuse to return a description or build a model; the status card reports the failure and copies the details.
+- **Executor asset APIs** — some executors block `CreateHumanoidModelFromDescriptionAsync` or `CreateHumanoidModelFromUserIdAsync`; the local clone fallbacks keep the feature usable, though fidelity can be lower.
+- **Rate limits** — repeated lookups can be throttled by Roblox. The script enforces a 1.5-second cooldown between attempts; if you still get throttled, wait a few seconds.
+- **Respawn / rejoin** — the overlay is removed and the status asks you to copy again. It is not re-applied automatically.
+- **Animations** — the overlay mirrors your current joint poses, so it follows what your character is doing. It does not copy the target's custom animation scripts or animation packs.
+- **Other players' view** — by design, they never see the preview. This tool is a personal preview, not a disguise.
+- **Game-specific overrides** — some games force their own animation packs, accessory rules, or character systems after spawn.
 
 ## Troubleshooting
 
@@ -187,19 +228,23 @@ Only `Players`, `UserInputService`, and `TweenService` are used as services. The
 | Window appears but is empty | That was a v1.0.0 bug (the panel was never parented to the ScreenGui). Rerun the loadstring above to get the current version. |
 | `Player not found` | Check the exact spelling, or use the numeric user ID / profile URL. |
 | `Could not load that avatar` | Usually a rate limit or a private avatar. Wait a few seconds and retry. |
-| `Failed to apply` | The game's avatar setup may be incompatible (e.g. custom character). Try another avatar or rejoin. |
-| Nothing changes on my character | Make sure your character is loaded, then retry. In R6 games, expect partial results. |
-| Avatar reverts after respawning | Appearance is local to the current character. Run the script again after respawn. |
-| Reset does not restore my look | Rejoin the game; some custom avatar systems block local re-application. |
+| `Preview failed` | The executor may block the avatar/model APIs, or the avatar may be private. The status should say details were copied to the clipboard; paste that report when asking for help. |
+| Nothing changes on my character | Make sure your character is fully loaded, then retry. In R6 games or locked-down executors, expect partial results. |
+| Preview disappears after respawning | The overlay belongs to the previous character. Copy the avatar again. |
+| Reset does not remove the preview | Press **Reset** once more, or press the title-bar `×` and rerun the script. `AvatarCopier.reset()` is also available. |
+| My real character stays invisible | Reset/destroy should restore it. If the script was interrupted, rerun it; the next execution restores local visibility and removes stale overlays. |
 | The script crashes / shows a red error | Paste your clipboard into the bug report. It should contain the Avatar Copier version, context, error message, and traceback. If the clipboard is empty, copy the console output instead. |
 
 ## FAQ
 
 **Do other players see the copied avatar?**
-No. Character appearance changes from the client are not replicated. Only your screen changes.
+No. The preview is a client-created model and the hidden-character state only exists on your screen.
 
 **Does this modify the game or other players?**
-No. It only applies a `HumanoidDescription` to your own `Humanoid` on your client.
+No. It never sends avatar changes to the server. It builds a local model and temporarily hides your real character on your own client.
+
+**Why does the script not apply the description to my Humanoid anymore?**
+`Humanoid:ApplyDescription()` only works on the backend server for server-owned characters. On the client, it is allowed only for Humanoids the client created, so Avatar Copier builds a separate local rig instead of touching your real one.
 
 **Does it need a key or an account login?**
 No. There is no key system and no external authentication.
@@ -207,11 +252,11 @@ No. There is no key system and no external authentication.
 **Is it safe for my account?**
 The script itself does not touch server state or send data anywhere, but using third-party executors carries risk under Roblox's Terms of Use. You use it at your own risk — see [DISCLAIMER.md](DISCLAIMER.md).
 
-**Why does the avatar revert when I respawn?**
-Your character is recreated on respawn, and the local description is lost. Run the script and copy again.
+**Why does the preview disappear when I respawn?**
+Your old character is recreated, so the overlay is cleaned up. Copy the avatar again.
 
 **Does it copy animations too?**
-It applies the avatar's `HumanoidDescription`, which includes appearance and animation fields. Games that force their own animation packs may override them.
+The overlay mirrors your current joint poses, so it follows your own animations. It does not copy the target's custom animation scripts or animation packs; some games also force their own animation set.
 
 **Can I copy someone who is not in my server?**
 Yes, by username or user ID, subject to Roblox API rate limits and avatar privacy.
@@ -236,10 +281,18 @@ The script is tested headlessly with open-source tooling — no Roblox client re
 - the new header, input, status card, and clear button exist,
 - the input focus ring switches to the accent colour and resets on blur,
 - responsive `UIScale` stays within its bounds,
-- the in-server fast path and the username API path,
+- the in-server clone path and the username API path,
+- the local overlay is created, welded, sanitized, hidden-character state is restored,
+- the real LocalPlayer Humanoid is never passed to `ApplyDescription`,
+- pose mirroring through `Motor6D.Transform`,
+- description/API and local-clone/partial fallback chains,
+- handled build failures write a diagnostic report to the clipboard,
+- unexpected errors include their context and traceback,
 - status colours and card tints for success, warning, and error,
-- cooldown, unknown user, empty input, reset, and cleanup,
-- no warnings on the happy path.
+- cooldown, unknown user, empty input, reset, respawn cleanup, and destroy cleanup,
+- no warnings on the successful-preview and validation paths.
+
+The suite currently runs `119` checks per profile (mobile and desktop).
 
 The suite runs twice, with a mobile and a desktop profile. CI runs the same script on every push.
 
@@ -266,6 +319,7 @@ docs/preview.svg        UI preview used by the README
 
 - [x] Redesigned UI with responsive scaling and a status card (`1.1.0`)
 - [x] Automatic clipboard error reports with tracebacks (`1.2.0`)
+- [x] Client-only overlay preview that no longer calls `ApplyDescription` on the real Humanoid (`1.3.0`)
 - [x] English and Indonesian documentation
 - [ ] Copy history and favourites
 - [ ] Partial copies (clothing only, accessories only, animations only)
