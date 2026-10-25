@@ -175,6 +175,9 @@ local CLASS_PARENTS = {
     LocalScript = "Script",
     Script = "LuaSourceContainer",
     ModuleScript = "LuaSourceContainer",
+    Animation = "Instance",
+    AnimationTrack = "Instance",
+    Animator = "Instance",
 }
 
 function METHODS:IsA(className)
@@ -236,6 +239,48 @@ end
 
 function METHODS:PivotTo(_cframe)
     return self
+end
+
+function METHODS:LoadAnimation(animation)
+    local track = newInstance("AnimationTrack")
+    track.Name = (animation and animation.Name or "Track") .. "Track"
+    track.Animation = animation
+    track.IsPlaying = false
+    track.Speed = 1
+    track.Weight = 1
+    track.TimePosition = 0
+    setParent(track, self)
+    return track
+end
+
+function METHODS:GetPlayingAnimationTracks()
+    local result = {}
+    for _, child in ipairs(children(self)) do
+        if props(child).ClassName == "AnimationTrack" and props(child).IsPlaying then
+            table.insert(result, child)
+        end
+    end
+    return result
+end
+
+function METHODS:Play(_fadeIn)
+    props(self).IsPlaying = true
+end
+
+function METHODS:Stop(_fadeOut)
+    props(self).IsPlaying = false
+end
+
+function METHODS:AdjustSpeed(speed)
+    if type(speed) == "number" then
+        props(self).Speed = speed
+    end
+end
+
+function METHODS:AdjustWeight(weight)
+    if type(weight) == "number" then
+        props(self).Weight = weight
+    end
 end
 
 function METHODS:FindFirstChild(name)
@@ -478,7 +523,7 @@ local function mockCFrame(x, y, z)
     return { Position = { X = x, Y = y, Z = z } }
 end
 
-local function makeRig(name, description, backendOwned)
+local function makeRig(name, description, backendOwned, includeGhost)
     local model = newInstance("Model")
     model.Name = name
     model.Parent = workspace
@@ -489,6 +534,26 @@ local function makeRig(name, description, backendOwned)
     rigHumanoid.RigType = Enum.HumanoidRigType.R15
     rigHumanoid._backendOwned = backendOwned == true
     rigHumanoid.__description = description
+
+    local rigAnimator = newInstance("Animator")
+    rigAnimator.Name = "Animator"
+    rigAnimator.Parent = rigHumanoid
+
+    if includeGhost ~= false then
+        -- A looping animation that stands in for whatever animations a live
+        -- target's Animator might carry. A clean preview must NOT inherit it:
+        -- sanitizeOverlay removes it and attachOverlay builds a fresh Animator.
+        local ghostAnimation = newInstance("Animation")
+        ghostAnimation.Name = "GhostAnimation"
+        ghostAnimation.AnimationId = "rbxassetid://9001"
+        ghostAnimation.Parent = rigAnimator
+
+        local ghostTrack = newInstance("AnimationTrack")
+        ghostTrack.Name = "GhostTrack"
+        ghostTrack.Animation = ghostAnimation
+        ghostTrack.IsPlaying = true
+        ghostTrack.Parent = rigAnimator
+    end
 
     local root = newInstance("HumanoidRootPart")
     root.Name = "HumanoidRootPart"
@@ -566,7 +631,7 @@ local function makeRig(name, description, backendOwned)
     return model, rigHumanoid
 end
 
-local character, humanoid = makeRig("LocalTester", ownDescription, true)
+local character, humanoid = makeRig("LocalTester", ownDescription, true, false)
 LocalPlayer.Character = character
 
 local serverPlayer = newInstance("Player")

@@ -43,16 +43,16 @@ local function findPreview()
     return folder and folder:FindFirstChild("AvatarCopierPreview")
 end
 
-local function overlayNeck(model)
-    local torso = model and model:FindFirstChild("Torso")
-    return torso and torso:FindFirstChild("Neck")
+local function overlayAnimator(model)
+    local previewHumanoid = model and model:FindFirstChildOfClass("Humanoid")
+    return previewHumanoid and previewHumanoid:FindFirstChildOfClass("Animator")
 end
 
 print("== avatar copier headless tests ==")
 
 local api = getgenv().AvatarCopier
 check(api ~= nil, "API is exposed through getgenv()")
-equal(api and api.version, "1.4.0", "version is 1.4.0")
+equal(api and api.version, "1.5.0", "version is 1.5.0")
 
 local expectedParent = IS_MOBILE and PlayerGui or hiddenContainer
 local gui = expectedParent:FindFirstChild("AvatarCopierGui")
@@ -150,7 +150,6 @@ end
 
 local localRoot = character:FindFirstChild("HumanoidRootPart")
 local localFace = character:FindFirstChild("Head"):FindFirstChild("Face")
-local sourceNeck = character:FindFirstChild("Torso"):FindFirstChild("Neck")
 
 -- In-server avatar: clone the live character and render it as a local overlay.
 if input and copyButton and statusLabel and statusDot and statusCard then
@@ -190,11 +189,40 @@ if input and copyButton and statusLabel and statusDot and statusCard then
     equal(copyButton.Active, true, "copy button re-enabled after a copy")
     equal(ENV.__clipboard, nil, "a successful preview does not touch the clipboard")
 
-    -- Pose mirroring: change the live joint, fire RenderStepped, then compare.
-    sourceNeck.Transform = { Angle = 42 }
-    RunService.RenderStepped:Fire()
-    local previewNeck = overlayNeck(preview)
-    equal(previewNeck and previewNeck.Transform.Angle, 42, "overlay mirrors the live Motor6D pose")
+    -- Animation handling: the preview gets a fresh Animator, inherits no
+    -- animation from the target rig, and mirrors the LOCAL player's tracks.
+    local previewHumanoidAnimator = previewHumanoid and previewHumanoid:FindFirstChildOfClass("Animator")
+    check(previewHumanoidAnimator ~= nil, "preview gets a fresh Animator")
+
+    local animatorTracks = previewHumanoidAnimator and previewHumanoidAnimator:GetPlayingAnimationTracks() or {}
+    equal(#animatorTracks, 0, "the target's animations are stripped from the preview")
+
+    local localAnimator = humanoid:FindFirstChildOfClass("Animator")
+    check(localAnimator ~= nil, "attach ensures the local Humanoid has an Animator")
+
+    if localAnimator and previewHumanoidAnimator then
+        local emoteAnimation = Instance.new("Animation")
+        emoteAnimation.Name = "LocalDance"
+        emoteAnimation.AnimationId = "rbxassetid://777"
+
+        local localTrack = localAnimator:LoadAnimation(emoteAnimation)
+        localTrack:Play()
+        localTrack:AdjustSpeed(2)
+        localTrack.TimePosition = 3
+        RunService.RenderStepped:Fire()
+
+        local mirrorTracks = previewHumanoidAnimator:GetPlayingAnimationTracks()
+        equal(#mirrorTracks, 1, "preview mirrors the local player's animation")
+        check(mirrorTracks[1] ~= nil and mirrorTracks[1].Animation ~= nil
+            and mirrorTracks[1].Animation.AnimationId == "rbxassetid://777",
+            "preview plays the same Animation asset as the local player")
+        equal(mirrorTracks[1] ~= nil and mirrorTracks[1].Speed or nil, 2, "preview track speed matches")
+        equal(mirrorTracks[1] ~= nil and mirrorTracks[1].TimePosition or nil, 3, "preview track time position is synced")
+
+        localTrack:Stop()
+        RunService.RenderStepped:Fire()
+        equal(#previewHumanoidAnimator:GetPlayingAnimationTracks(), 0, "stopping the local track stops the preview track")
+    end
 
     if resetButton then
         resetButton.MouseButton1Click:Fire()
@@ -337,7 +365,7 @@ if input and copyButton and statusLabel and statusDot then
     copyButton.MouseButton1Click:Fire()
 
     local clipboard = ENV.__clipboard or ""
-    contains(clipboard, "Avatar Copier v1.4.0 - error report", "build failure clipboard uses the current version")
+    contains(clipboard, "Avatar Copier v1.5.0 - error report", "build failure clipboard uses the current version")
     contains(clipboard, "Context: copy/build", "build failure clipboard includes the context")
     contains(clipboard, "Target: TestUser", "build failure clipboard includes the target")
     contains(clipboard, "Resolved user ID: 12345", "build failure clipboard includes the resolved ID")
@@ -384,18 +412,30 @@ if input and copyButton and statusLabel and statusDot then
     equal(reportOk, true, "error reporting survives a broken clipboard")
 end
 
--- Respawning while a preview is active cleans up the local overlay.
+-- Respawning while a preview is active re-applies it automatically (v1.5.0).
 if input and copyButton and statusLabel then
     advanceClock(2)
     input.Text = "ServerFriend"
     copyButton.MouseButton1Click:Fire()
     check(api.isPreviewing(), "preview is active before the respawn event")
 
-    LocalPlayer.CharacterAdded:Fire(character)
-    equal(api.isPreviewing(), false, "CharacterAdded removes the stale overlay")
-    equal(overlayFolder(), nil, "CharacterAdded removes the overlay folder")
-    equal(localRoot.LocalTransparencyModifier, 0, "CharacterAdded restores character visibility")
-    contains(statusLabel.Text, "Character respawned", "CharacterAdded asks the user to copy again")
+    local respawnCharacter = character:Clone()
+    LocalPlayer.Character = respawnCharacter
+    LocalPlayer.CharacterAdded:Fire(respawnCharacter)
+
+    check(findPreview() ~= nil, "respawn re-applies the preview automatically")
+    equal(api.isPreviewing(), true, "API reports the re-applied preview")
+    contains(statusLabel.Text, "Previewing ServerFriend", "re-applied preview reports the target")
+    RunService.RenderStepped:Fire()
+    check(overlayFolder() ~= nil, "re-applied preview keeps its follow loop alive")
+
+    -- A manual Reset stops the automatic re-apply for future respawns.
+    if resetButton then
+        resetButton.MouseButton1Click:Fire()
+        equal(api.isPreviewing(), false, "reset ends the re-applied preview")
+    end
+    LocalPlayer.CharacterAdded:Fire(respawnCharacter)
+    equal(api.isPreviewing(), false, "after a manual reset the respawn does not re-apply")
 end
 
 -- Closing the interface hides it but keeps the avatar preview alive;

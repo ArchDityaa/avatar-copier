@@ -4,6 +4,50 @@ All notable changes to Avatar Copier are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.5.0 — 2026-10-25
+
+### Reworked
+
+- **Animations are now mirrored through `Animator` tracks, not `Motor6D`
+  transforms.** The old pose-copying approach wrote `Motor6D.Transform` values
+  from your rig into the preview's joints every frame — with rigs that do not
+  match (in-server clones with game-specific joints, R6 vs R15 mixes), that
+  sheared body parts and looked glitchy. Now the preview's own fresh
+  `Animator` replays exactly the tracks you are playing (same Animation asset,
+  speed, weight, and time position), which is correct for any rig and cannot
+  twist the preview apart.
+- **The target's animation machinery is destroyed.** Sanitization removes the
+  cloned `Animator`, `AnimationController`, `Animation`, and `AnimationTrack`
+  instances from the preview, then attach builds a brand-new `Animator` that
+  only ever loads tracks from your own Humanoid. Cloning the avatar of someone
+  in your server can no longer carry their animation state with it.
+- Copying a rig family that differs from yours (R6 target on an R15 rig or
+  vice versa) skips the animation sync instead of playing mismatched tracks.
+
+### Fixed
+
+- The preprocessing of the real character now re-applies
+  `LocalTransparencyModifier` every frame. The Roblox engine recalculates that
+  property when the camera zooms, which used to make your real character fade
+  back in while using the preview.
+- The follow loop no longer dies silently on the first failed frame (for
+  example mid-respawn): it tolerates glitches and only stops after roughly
+  half a second of continuous failures, telling the status card about it.
+
+### Added
+
+- **Automatic re-apply after respawn.** The last typed target is remembered;
+  when your character respawns, the preview is rebuilt on the new character
+  without you copying again. A manual **Reset** cancels the auto re-apply.
+
+### Changed
+
+- Version bumped to `1.5.0`.
+- Headless tests grew from `141` to `150` checks per profile (mobile and
+  desktop), covering the fresh `Animator`, animation-track mirroring
+  (speed/time position/stop), no target-animation leakage, and respawn
+  auto re-apply plus its cancellation after Reset.
+
 ## 1.4.0 — 2026-10-25
 
 ### Fixed
