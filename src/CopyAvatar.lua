@@ -1,5 +1,5 @@
 --[[
-    Avatar Copier — v1.1.0
+    Avatar Copier — v1.2.0
     ----------------------
     A fully client-side Roblox avatar copier for Delta Executor.
 
@@ -9,6 +9,8 @@
       * The change is applied locally only. Roblox does not replicate character
         appearance changes made from the client, so other players keep seeing
         your normal avatar. Nothing is sent to the game server.
+      * Copies unexpected script errors to the executor clipboard, together with
+        the version, context, and traceback, so bug reports are easy to paste.
 
     What it does NOT do:
       * It does not modify other players, the game, or any server state.
@@ -23,7 +25,7 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.1.0",
+    VERSION = "1.2.0",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
     ACCENT_PRESSED = Color3.fromRGB(79, 70, 229),
@@ -87,6 +89,130 @@ if not LocalPlayer then
 end
 
 local LOG_PREFIX = "[Avatar Copier]"
+
+-- ------------------------------------------------------- error reporting
+
+-- Unexpected errors are copied to the executor clipboard so users can paste a
+-- complete report when asking for help. All clipboard work is protected: a
+-- missing or broken clipboard API must never hide the original error.
+local MAX_CLIPBOARD_LENGTH = 8000
+local CLIPBOARD_FUNCTIONS = { "setclipboard", "toclipboard", "writeclipboard" }
+local CLIPBOARD_GLOBALS = {
+    setclipboard = function()
+        return setclipboard
+    end,
+    toclipboard = function()
+        return toclipboard
+    end,
+    writeclipboard = function()
+        return writeclipboard
+    end,
+}
+
+local function resolveClipboard()
+    local env
+    if type(getgenv) == "function" then
+        local ok, result = pcall(getgenv)
+        if ok and type(result) == "table" then
+            env = result
+        end
+    end
+
+    for _, name in ipairs(CLIPBOARD_FUNCTIONS) do
+        if env and type(env[name]) == "function" then
+            return env[name], name
+        end
+
+        local getter = CLIPBOARD_GLOBALS[name]
+        local ok, fn = pcall(getter)
+        if ok and type(fn) == "function" then
+            return fn, name
+        end
+    end
+
+    return nil, "setclipboard, toclipboard, or writeclipboard is unavailable"
+end
+
+local function safeToString(value)
+    local ok, text = pcall(tostring, value)
+    if ok then
+        return text
+    end
+    return "<unprintable value>"
+end
+
+local function copyToClipboard(text)
+    local setter, name = resolveClipboard()
+    if not setter then
+        return false, name
+    end
+
+    local ok, err = pcall(setter, text)
+    if ok then
+        return true, name
+    end
+
+    return false, ("%s failed: %s"):format(name, safeToString(err))
+end
+
+local function reportError(context, err)
+    local message = safeToString(err)
+    local contextText = safeToString(context)
+    local traceback = message
+
+    local traceOk, captured = pcall(function()
+        return debug.traceback(message, 2)
+    end)
+    if traceOk and type(captured) == "string" and captured ~= "" then
+        traceback = captured
+    end
+
+    local timestamp = "unknown time"
+    local timeOk, timeText = pcall(function()
+        return os.date("!%Y-%m-%d %H:%M:%S") .. " UTC"
+    end)
+    if timeOk and type(timeText) == "string" and timeText ~= "" then
+        timestamp = timeText
+    end
+
+    local report = table.concat({
+        ("Avatar Copier v%s - error report"):format(CONFIG.VERSION),
+        "Time: " .. timestamp,
+        "Context: " .. contextText,
+        "Error: " .. message,
+        "Traceback:",
+        traceback,
+    }, "\n")
+
+    if #report > MAX_CLIPBOARD_LENGTH then
+        report = report:sub(1, MAX_CLIPBOARD_LENGTH) .. "\n...[truncated]"
+    end
+
+    pcall(warn, ("%s Unexpected error (%s): %s"):format(LOG_PREFIX, contextText, message))
+
+    local copied, method = copyToClipboard(report)
+    if copied then
+        pcall(print, ("%s Error report copied to the clipboard via %s."):format(LOG_PREFIX, safeToString(method)))
+    else
+        pcall(warn, ("%s Could not copy the error report to the clipboard (%s)."):format(
+            LOG_PREFIX,
+            safeToString(method)
+        ))
+    end
+
+    return report
+end
+
+local function safeCall(context, callback, ...)
+    local args = { ... }
+    local count = select("#", ...)
+
+    return xpcall(function()
+        return callback(table.unpack(args, 1, count))
+    end, function(err)
+        return reportError(context, err)
+    end)
+end
 
 -- ---------------------------------------------------------------- state
 
@@ -169,17 +295,21 @@ local function styleButton(button, baseColor, hoverColor)
     button.BackgroundColor3 = baseColor
 
     track(button.MouseEnter:Connect(function()
-        if button.Active == false then
-            return
-        end
-        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = hoverColor }):Play()
+        safeCall("button hover", function()
+            if button.Active == false then
+                return
+            end
+            TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = hoverColor }):Play()
+        end)
     end))
 
     track(button.MouseLeave:Connect(function()
-        if button.Active == false then
-            return
-        end
-        TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = baseColor }):Play()
+        safeCall("button unhover", function()
+            if button.Active == false then
+                return
+            end
+            TweenService:Create(button, TweenInfo.new(0.15), { BackgroundColor3 = baseColor }):Play()
+        end)
     end))
 end
 
@@ -229,6 +359,19 @@ local function setBusy(value)
     end
 
     setControlsEnabled(not value)
+end
+
+local function runSafely(context, callback, ...)
+    local args = { ... }
+    local count = select("#", ...)
+
+    task.spawn(function()
+        local ok = safeCall(context, callback, table.unpack(args, 1, count))
+        if not ok then
+            pcall(setBusy, false)
+            pcall(setStatus, "Unexpected error. Details copied to clipboard.", "error")
+        end
+    end)
 end
 
 local function refreshClearButton()
@@ -522,11 +665,15 @@ local function buildBody(parent)
     local inputStroke = makeStroke(inputBox, COLORS.stroke, 1)
 
     track(inputBox.Focused:Connect(function()
-        inputStroke.Color = CONFIG.ACCENT
+        safeCall("input focus", function()
+            inputStroke.Color = CONFIG.ACCENT
+        end)
     end))
 
     track(inputBox.FocusLost:Connect(function()
-        inputStroke.Color = COLORS.stroke
+        safeCall("input blur", function()
+            inputStroke.Color = COLORS.stroke
+        end)
     end))
 
     local inputPadding = Instance.new("UIPadding")
@@ -701,7 +848,9 @@ local function buildInterface()
             return camera:GetPropertyChangedSignal("ViewportSize")
         end)
         if ok and signal then
-            track(signal:Connect(updateScale))
+            track(signal:Connect(function()
+                safeCall("viewport resize", updateScale)
+            end))
         end
     end
 
@@ -712,45 +861,51 @@ local function buildInterface()
     local startPositionAbsolute
 
     track(titleBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPositionAbsolute = window.AbsolutePosition
-        end
+        safeCall("drag start", function()
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPositionAbsolute = window.AbsolutePosition
+            end
+        end)
     end))
 
     track(UserInputService.InputChanged:Connect(function(input)
-        if not dragging then
-            return
-        end
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement
-            and input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
+        safeCall("drag move", function()
+            if not dragging then
+                return
+            end
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement
+                and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
 
-        local currentCamera = workspace.CurrentCamera
-        local viewport = currentCamera and currentCamera.ViewportSize or Vector2.new(1920, 1080)
-        local delta = input.Position - dragStart
+            local currentCamera = workspace.CurrentCamera
+            local viewport = currentCamera and currentCamera.ViewportSize or Vector2.new(1920, 1080)
+            local delta = input.Position - dragStart
 
-        local x = math.clamp(
-            startPositionAbsolute.X + delta.X,
-            0,
-            math.max(0, viewport.X - window.AbsoluteSize.X)
-        )
-        local y = math.clamp(
-            startPositionAbsolute.Y + delta.Y,
-            0,
-            math.max(0, viewport.Y - window.AbsoluteSize.Y)
-        )
-        window.Position = UDim2.fromOffset(x, y)
+            local x = math.clamp(
+                startPositionAbsolute.X + delta.X,
+                0,
+                math.max(0, viewport.X - window.AbsoluteSize.X)
+            )
+            local y = math.clamp(
+                startPositionAbsolute.Y + delta.Y,
+                0,
+                math.max(0, viewport.Y - window.AbsoluteSize.Y)
+            )
+            window.Position = UDim2.fromOffset(x, y)
+        end)
     end))
 
     track(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
+        safeCall("drag end", function()
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
     end))
 
     -- lifecycle ------------------------------------------------------
@@ -773,7 +928,9 @@ local function buildInterface()
         end
     end
 
-    track(closeButton.MouseButton1Click:Connect(destroy))
+    track(closeButton.MouseButton1Click:Connect(function()
+        safeCall("close button", destroy)
+    end))
 
     return destroy
 end
@@ -1062,9 +1219,11 @@ end
 
 -- ------------------------------------------------------------- startup
 
-local buildOk, buildResult = pcall(buildInterface)
+local buildOk, buildResult = xpcall(buildInterface, function(err)
+    return reportError("startup/build", err)
+end)
 if not buildOk then
-    return warn(("%s Startup failed: %s"):format(LOG_PREFIX, tostring(buildResult)))
+    return
 end
 
 local destroyInterface = buildResult
@@ -1072,52 +1231,63 @@ if destroyInterface == nil then
     return
 end
 
-track(copyButton.MouseButton1Click:Connect(function()
-    task.spawn(function()
-        copyAvatar(inputBox.Text)
-    end)
-end))
+local function start()
+    track(copyButton.MouseButton1Click:Connect(function()
+        runSafely("copy button", copyAvatar, inputBox.Text)
+    end))
 
-track(resetButton.MouseButton1Click:Connect(function()
-    task.spawn(resetAvatar)
-end))
+    track(resetButton.MouseButton1Click:Connect(function()
+        runSafely("reset button", resetAvatar)
+    end))
 
-track(clearButton.MouseButton1Click:Connect(function()
-    inputBox.Text = ""
-    refreshClearButton()
-    setStatus("Enter a username to begin.", "idle")
-    pcall(function()
-        inputBox:CaptureFocus()
-    end)
-end))
-
-track(inputBox.Changed:Connect(function(property)
-    if property == "Text" then
-        refreshClearButton()
-    end
-end))
-
-track(inputBox.FocusLost:Connect(function(enterPressed)
-    if enterPressed then
-        task.spawn(function()
-            copyAvatar(inputBox.Text)
+    track(clearButton.MouseButton1Click:Connect(function()
+        local ok = safeCall("clear button", function()
+            inputBox.Text = ""
+            refreshClearButton()
+            setStatus("Enter a username to begin.", "idle")
+            pcall(function()
+                inputBox:CaptureFocus()
+            end)
         end)
-    end
-end))
+        if not ok then
+            setStatus("Unexpected error. Details copied to clipboard.", "error")
+        end
+    end))
 
--- Programmatic API for power users:
---   AvatarCopier.copy("Roblox")   AvatarCopier.reset()   AvatarCopier.destroy()
-if type(getgenv) == "function" then
-    getgenv().AvatarCopier = {
-        version = CONFIG.VERSION,
-        copy = function(target)
-            task.spawn(copyAvatar, target)
-        end,
-        reset = function()
-            task.spawn(resetAvatar)
-        end,
-        destroy = destroyInterface,
-    }
+    track(inputBox.Changed:Connect(function(property)
+        if property == "Text" then
+            safeCall("input change", refreshClearButton)
+        end
+    end))
+
+    track(inputBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            runSafely("enter key", copyAvatar, inputBox.Text)
+        end
+    end))
+
+    -- Programmatic API for power users:
+    --   AvatarCopier.copy("Roblox")   AvatarCopier.reset()   AvatarCopier.destroy()
+    if type(getgenv) == "function" then
+        getgenv().AvatarCopier = {
+            version = CONFIG.VERSION,
+            copy = function(target)
+                runSafely("AvatarCopier.copy", copyAvatar, target)
+            end,
+            reset = function()
+                runSafely("AvatarCopier.reset", resetAvatar)
+            end,
+            destroy = function()
+                safeCall("AvatarCopier.destroy", destroyInterface)
+            end,
+        }
+    end
+
+    print(("%s v%s loaded. Client-side only."):format(LOG_PREFIX, CONFIG.VERSION))
 end
 
-print(("%s v%s loaded. Client-side only."):format(LOG_PREFIX, CONFIG.VERSION))
+local startOk = safeCall("startup", start)
+if not startOk then
+    pcall(setBusy, false)
+    pcall(setStatus, "Startup failed. Details copied to clipboard.", "error")
+end

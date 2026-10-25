@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Version](https://img.shields.io/badge/version-1.1.0-6366f1)
+![Version](https://img.shields.io/badge/version-1.2.0-6366f1)
 ![Tests](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -30,6 +30,7 @@ Roblox does not replicate character appearance changes made from the client, so 
 | Reset button | Restores your original appearance |
 | Clear input | One tap to start over |
 | Status card | Colour-coded feedback for loading, success, warnings, and errors |
+| Automatic error reports | Unexpected Lua errors are copied to your clipboard with a full traceback |
 | Responsive window | Automatically scales down on smaller screens |
 | Draggable GUI | Minimal dark window, stays out of the way |
 | Client-side only | No server changes, no advantage, no third-party requests |
@@ -61,6 +62,7 @@ No key system, no configuration file, and no external asset dependency.
 - Roblox client (PC, or any platform where Delta runs)
 - [Delta Executor](https://deltaexploit.com/) or any executor with `game:HttpGet`
 - `gethui` is optional — see [Troubleshooting](#troubleshooting)
+- `setclipboard`, `toclipboard`, or `writeclipboard` is recommended for automatic error reports; without one, reports are printed to the console
 - An R15 avatar is recommended (most modern games); see [Limitations](#limitations)
 
 ## Compatibility
@@ -69,6 +71,7 @@ No key system, no configuration file, and no external asset dependency.
 | --- | --- | --- |
 | Delta Executor | Supported | Prefers `gethui` when available |
 | Other executors | Supported | Requires `game:HttpGet`, `getgenv`; `gethui` optional |
+| Error clipboard | Supported | Uses `setclipboard`, `toclipboard`, or `writeclipboard`; falls back to the console |
 | PC | Supported | Desktop attaches to `gethui` → `CoreGui` → `PlayerGui` |
 | Mobile | Supported | Attaches to `PlayerGui` first, where mobile executors are more reliable |
 | R15 avatars | Best | Full `HumanoidDescription` support |
@@ -99,7 +102,7 @@ AvatarCopier.copy("Roblox")    -- copy by username / ID / URL
 AvatarCopier.copy(1)           -- numeric user ID
 AvatarCopier.reset()           -- restore your original look
 AvatarCopier.destroy()         -- close the window
-print(AvatarCopier.version)    -- "1.1.0"
+print(AvatarCopier.version)    -- "1.2.0"
 ```
 
 | Member | Description |
@@ -107,9 +110,26 @@ print(AvatarCopier.version)    -- "1.1.0"
 | `AvatarCopier.copy(target)` | Starts a copy in the background. Progress and errors appear in the UI. |
 | `AvatarCopier.reset()` | Restores the snapshot taken before your first copy, or clears the appearance. |
 | `AvatarCopier.destroy()` | Removes the GUI and clears the global API. |
-| `AvatarCopier.version` | Current version string (`"1.1.0"`). |
+| `AvatarCopier.version` | Current version string (`"1.2.0"`). |
 
 `copy` and `reset` are fire-and-forget: they spawn a task and return immediately. Read the status card for the result.
+
+### Automatic error reports
+
+If an unexpected Luau error happens — during startup, a button handler, the copy/reset pipeline, or an API call — Avatar Copier catches it and builds a compact report:
+
+```text
+Avatar Copier v1.2.0 - error report
+Time: 2026-10-25 12:34:56 UTC
+Context: copy button
+Error: <error message>
+Traceback:
+<stack trace>
+```
+
+The report is copied to your device clipboard through `setclipboard`, `toclipboard`, or `writeclipboard` (whichever the executor provides), and the status card changes to **Unexpected error. Details copied to clipboard.** The console also confirms the copy.
+
+Validation results such as `Player not found` or `Could not load that avatar` are normal UI feedback, not crashes, so they do not overwrite your clipboard. If no clipboard function is available, the report is printed to the console and a warning explains why it could not be copied. Nothing is uploaded anywhere.
 
 ## How it works
 
@@ -142,6 +162,7 @@ Only `Players`, `UserInputService`, and `TweenService` are used as services. The
 
 - **No third-party requests.** Avatar data comes from Roblox's own `Players` API.
 - **Nothing is uploaded.** There is no analytics, telemetry, webhook, or config server.
+- **Error reports stay local.** Crash details are written only to your own clipboard (and the console); they are never transmitted.
 - **Client-side only.** Appearance changes are not replicated to the server or other players.
 - **No advantage.** The tool is a personal preview, not a disguise or exploit.
 - **Open source.** The entire script is one readable Luau file.
@@ -170,6 +191,7 @@ Only `Players`, `UserInputService`, and `TweenService` are used as services. The
 | Nothing changes on my character | Make sure your character is loaded, then retry. In R6 games, expect partial results. |
 | Avatar reverts after respawning | Appearance is local to the current character. Run the script again after respawn. |
 | Reset does not restore my look | Rejoin the game; some custom avatar systems block local re-application. |
+| The script crashes / shows a red error | Paste your clipboard into the bug report. It should contain the Avatar Copier version, context, error message, and traceback. If the clipboard is empty, copy the console output instead. |
 
 ## FAQ
 
@@ -243,6 +265,7 @@ docs/preview.svg        UI preview used by the README
 ## Roadmap
 
 - [x] Redesigned UI with responsive scaling and a status card (`1.1.0`)
+- [x] Automatic clipboard error reports with tracebacks (`1.2.0`)
 - [x] English and Indonesian documentation
 - [ ] Copy history and favourites
 - [ ] Partial copies (clothing only, accessories only, animations only)

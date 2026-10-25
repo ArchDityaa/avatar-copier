@@ -456,6 +456,10 @@ getgenv = function()
     return ENV
 end
 
+ENV.setclipboard = function(text)
+    ENV.__clipboard = text
+end
+
 gethui = function()
     return hiddenContainer
 end

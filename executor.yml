@@ -4,3 +4,12 @@ globals:
     args: []
   gethui:
     args: []
+  setclipboard:
+    args:
+      - type: string
+  toclipboard:
+    args:
+      - type: string
+  writeclipboard:
+    args:
+      - type: string

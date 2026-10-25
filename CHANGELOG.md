@@ -4,6 +4,21 @@ All notable changes to Avatar Copier are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.0 — 2026-10-25
+
+### Added
+
+- Automatic crash reports: unexpected Luau errors are caught during startup,
+  GUI construction, button handlers, copy/reset operations, and API calls.
+- Reports include the script version, UTC timestamp, failure context, error
+  message, and stack trace, then are copied with `setclipboard`,
+  `toclipboard`, or `writeclipboard`.
+- Console fallback and a clear warning when the executor has no clipboard API.
+- The status card reports that details were copied, and controls recover from
+  an unexpected error instead of staying stuck in the busy state.
+- Headless tests cover clipboard output, context, traceback, status recovery,
+  and a failed copy pipeline (`57` checks per profile).
+
 ## 1.1.0 — 2026-10-25
 
 ### Added

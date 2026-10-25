@@ -34,7 +34,7 @@ print("== avatar copier headless tests ==")
 
 local api = getgenv().AvatarCopier
 check(api ~= nil, "API is exposed through getgenv()")
-equal(api and api.version, "1.1.0", "version is 1.1.0")
+equal(api and api.version, "1.2.0", "version is 1.2.0")
 
 local expectedParent = IS_MOBILE and PlayerGui or hiddenContainer
 local gui = expectedParent:FindFirstChild("AvatarCopierGui")
@@ -140,14 +140,42 @@ if resetButton and statusLabel then
     contains(statusLabel.Text, "Restored your own avatar", "status confirms the reset")
 end
 
+equal(#warnings, 0, "no warnings during the happy path")
+
+-- Any unexpected Lua error must be copied to the executor clipboard.
+if input and copyButton and statusLabel and statusDot then
+    advanceClock(2)
+    local originalGetPlayers = Players.GetPlayers
+    Players.GetPlayers = function()
+        error("intentional clipboard test failure")
+    end
+
+    input.Text = "ClipboardTest"
+    copyButton.MouseButton1Click:Fire()
+    Players.GetPlayers = originalGetPlayers
+
+    local clipboard = ENV.__clipboard or ""
+    contains(clipboard, "intentional clipboard test failure", "unexpected errors are copied to the clipboard")
+    contains(clipboard, "Context: copy button", "clipboard report includes the failure context")
+    contains(clipboard, "Traceback:", "clipboard report includes a traceback")
+    contains(statusLabel.Text, "Unexpected error", "status explains that details were copied")
+    equal(statusDot.BackgroundColor3, COLORS.error, "unexpected error uses the error status colour")
+    equal(copyButton.Active, true, "controls recover after an unexpected error")
+
+    local originalSetClipboard = ENV.setclipboard
+    ENV.setclipboard = function()
+        error("clipboard setter is broken")
+    end
+    local reportOk = pcall(reportError, "clipboard failure", "boom")
+    ENV.setclipboard = originalSetClipboard
+    equal(reportOk, true, "error reporting survives a broken clipboard")
+end
+
 if api and gui then
     api.destroy()
     equal(gui.Parent, nil, "destroy detaches the ScreenGui")
     equal(getgenv().AvatarCopier, nil, "destroy clears the global API")
 end
-
-equal(#warnings, 0, "no warnings during the happy path")
-
 print(("%d checks, %d failed"):format(checks, failures))
 if failures > 0 then
     error(("%d test(s) failed"):format(failures))

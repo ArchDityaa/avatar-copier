@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Versi](https://img.shields.io/badge/version-1.1.0-6366f1)
+![Versi](https://img.shields.io/badge/version-1.2.0-6366f1)
 ![Test](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![Lisensi](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -30,6 +30,7 @@ Roblox tidak mereplikasi perubahan penampilan karakter yang dilakukan dari clien
 | Tombol Reset | Mengembalikan penampilan asli Anda |
 | Clear input | Satu ketukan untuk memulai ulang |
 | Status card | Umpan balik berwarna untuk loading, sukses, peringatan, dan error |
+| Laporan error otomatis | Error Lua tak terduga disalin ke clipboard lengkap dengan traceback |
 | Jendela responsif | Otomatis mengecil di layar yang lebih kecil |
 | GUI bisa digeser | Jendela gelap minimalis, tidak menghalangi layar |
 | Client-side only | Tanpa perubahan server, tanpa keuntungan, tanpa request pihak ketiga |
@@ -61,6 +62,7 @@ Tanpa key system, tanpa file konfigurasi, dan tanpa ketergantungan asset ekstern
 - Client Roblox (PC, atau platform apa pun yang bisa menjalankan Delta)
 - [Delta Executor](https://deltaexploit.com/) atau executor apa pun yang mendukung `game:HttpGet`
 - `gethui` opsional — lihat [Troubleshooting](#troubleshooting)
+- `setclipboard`, `toclipboard`, atau `writeclipboard` disarankan untuk laporan error otomatis; tanpa itu, laporan dicetak ke console
 - Avatar R15 disarankan (umum di game modern); lihat [Batasan](#batasan)
 
 ## Kompatibilitas
@@ -69,6 +71,7 @@ Tanpa key system, tanpa file konfigurasi, dan tanpa ketergantungan asset ekstern
 | --- | --- | --- |
 | Delta Executor | Didukung | Memprioritaskan `gethui` jika tersedia |
 | Executor lain | Didukung | Perlu `game:HttpGet`, `getgenv`; `gethui` opsional |
+| Clipboard error | Didukung | Memakai `setclipboard`, `toclipboard`, atau `writeclipboard`; fallback ke console |
 | PC | Didukung | Desktop memakai urutan `gethui` → `CoreGui` → `PlayerGui` |
 | Mobile | Didukung | Memprioritaskan `PlayerGui`, lebih andal di executor mobile |
 | Avatar R15 | Terbaik | Dukungan `HumanoidDescription` penuh |
@@ -99,7 +102,7 @@ AvatarCopier.copy("Roblox")    -- copy lewat username / ID / URL
 AvatarCopier.copy(1)           -- user ID numerik
 AvatarCopier.reset()           -- kembalikan penampilan asli
 AvatarCopier.destroy()         -- tutup jendela
-print(AvatarCopier.version)    -- "1.1.0"
+print(AvatarCopier.version)    -- "1.2.0"
 ```
 
 | Anggota | Keterangan |
@@ -107,9 +110,26 @@ print(AvatarCopier.version)    -- "1.1.0"
 | `AvatarCopier.copy(target)` | Memulai copy di background. Progres dan error tampil di UI. |
 | `AvatarCopier.reset()` | Mengembalikan snapshot sebelum copy pertama, atau membersihkan penampilan. |
 | `AvatarCopier.destroy()` | Menghapus GUI dan membersihkan API global. |
-| `AvatarCopier.version` | String versi saat ini (`"1.1.0"`). |
+| `AvatarCopier.version` | String versi saat ini (`"1.2.0"`). |
 
 `copy` dan `reset` bersifat fire-and-forget: keduanya menjalankan task lalu langsung kembali. Baca status card untuk hasilnya.
+
+### Laporan error otomatis
+
+Jika terjadi error Luau tak terduga — saat startup, di handler tombol, pipeline copy/reset, atau pemanggilan API — Avatar Copier menangkapnya dan menyusun laporan ringkas:
+
+```text
+Avatar Copier v1.2.0 - error report
+Time: 2026-10-25 12:34:56 UTC
+Context: copy button
+Error: <pesan error>
+Traceback:
+<stack trace>
+```
+
+Laporan disalin ke clipboard perangkat melalui `setclipboard`, `toclipboard`, atau `writeclipboard` (mana pun yang tersedia di executor), lalu status card berubah menjadi **Unexpected error. Details copied to clipboard.** Console juga menampilkan konfirmasi.
+
+Hasil validasi seperti `Player not found` atau `Could not load that avatar` adalah umpan balik UI normal, bukan crash, sehingga tidak menimpa clipboard. Jika tidak ada fungsi clipboard, laporan dicetak ke console dan sebuah warning menjelaskan alasannya. Tidak ada data yang diunggah ke mana pun.
 
 ## Cara kerja
 
@@ -142,6 +162,7 @@ Hanya `Players`, `UserInputService`, dan `TweenService` yang dipakai sebagai ser
 
 - **Tanpa request pihak ketiga.** Data avatar diambil dari API `Players` milik Roblox sendiri.
 - **Tidak ada upload.** Tidak ada analytics, telemetri, webhook, atau server konfigurasi.
+- **Laporan error tetap lokal.** Detail crash hanya ditulis ke clipboard Anda sendiri (dan console); tidak pernah dikirim ke mana pun.
 - **Client-side only.** Perubahan penampilan tidak direplikasi ke server atau pemain lain.
 - **Tanpa keuntungan.** Alat ini adalah pratinjau pribadi, bukan penyamaran atau exploit.
 - **Open source.** Seluruh script adalah satu file Luau yang bisa dibaca.
@@ -170,6 +191,7 @@ Hanya `Players`, `UserInputService`, dan `TweenService` yang dipakai sebagai ser
 | Karakter tidak berubah | Pastikan karakter sudah termuat, lalu coba lagi. Di game R6, hasilnya bisa sebagian. |
 | Avatar kembali setelah respawn | Penampilan bersifat lokal untuk karakter saat ini. Jalankan script lagi setelah respawn. |
 | Reset tidak mengembalikan tampilan | Rejoin game; sebagian sistem avatar custom memblokir penerapan ulang secara lokal. |
+| Script crash / muncul error merah | Tempel isi clipboard ke laporan bug. Isinya harus memuat versi Avatar Copier, context, pesan error, dan traceback. Jika clipboard kosong, salin output console. |
 
 ## FAQ
 
@@ -243,6 +265,7 @@ docs/preview.svg        Pratinjau UI untuk README
 ## Roadmap
 
 - [x] Redesign UI dengan scaling responsif dan status card (`1.1.0`)
+- [x] Laporan error otomatis ke clipboard lengkap dengan traceback (`1.2.0`)
 - [x] Dokumentasi bahasa Inggris dan Indonesia
 - [ ] Riwayat copy dan favorit
 - [ ] Copy sebagian (pakaian saja, aksesori saja, animasi saja)
