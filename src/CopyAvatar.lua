@@ -1,5 +1,5 @@
 --[[
-    Avatar Copier — v1.3.0
+    Avatar Copier — v1.4.0
     ----------------------
     A fully client-side Roblox avatar previewer for Delta Executor.
 
@@ -26,7 +26,7 @@
 ]]
 
 local CONFIG = {
-    VERSION = "1.3.0",
+    VERSION = "1.4.0",
     ACCENT = Color3.fromRGB(99, 102, 241),
     ACCENT_HOVER = Color3.fromRGB(129, 140, 248),
     ACCENT_PRESSED = Color3.fromRGB(79, 70, 229),
@@ -293,6 +293,8 @@ local apiTable = nil
 local removeOverlay
 
 local screenGui
+local pillGui
+local pill
 local window
 local uiScale
 local statusCard
@@ -445,9 +447,11 @@ local function runSafely(context, callback, ...)
     end)
 end
 
+local interfaceCollapsed = false
+
 local function refreshClearButton()
     if clearButton and inputBox then
-        clearButton.Visible = inputBox.Text ~= ""
+        clearButton.Visible = inputBox.Text ~= "" and not interfaceCollapsed
     end
 end
 
@@ -595,7 +599,14 @@ end
 local function removePreviousGuis()
     for _, candidate in ipairs(candidateParents()) do
         local ok, previous = pcall(function()
-            return candidate.instance:FindFirstChild("AvatarCopierGui")
+            local stale = nil
+            for _, name in ipairs({ "AvatarCopierGui", "AvatarCopierPillGui" }) do
+                local child = candidate.instance:FindFirstChild(name)
+                if child then
+                    stale = child
+                end
+            end
+            return stale
         end)
         if ok and previous then
             pcall(function()
@@ -642,7 +653,7 @@ local function buildHeader(titleBar)
     local versionPill = Instance.new("Frame")
     versionPill.Name = "VersionPill"
     versionPill.Size = UDim2.fromOffset(54, 20)
-    versionPill.Position = UDim2.new(1, -104, 0, 12)
+    versionPill.Position = UDim2.new(1, -142, 0, 12)
     versionPill.BackgroundColor3 = COLORS.surfaceAlt
     versionPill.BorderSizePixel = 0
     versionPill.Parent = titleBar
@@ -661,6 +672,19 @@ local function buildHeader(titleBar)
     versionText.TextXAlignment = Enum.TextXAlignment.Center
     versionText.TextYAlignment = Enum.TextYAlignment.Center
 
+    local minimizeButton = makeButton(
+        titleBar,
+        "Minimize",
+        "–",
+        UDim2.fromOffset(32, 32),
+        UDim2.new(1, -80, 0, 6),
+        Enum.Font.GothamBold,
+        18,
+        COLORS.textMuted,
+        COLORS.surfaceAlt
+    )
+    styleButton(minimizeButton, COLORS.surfaceAlt, COLORS.surfaceHover)
+
     local closeButton = makeButton(
         titleBar,
         "Close",
@@ -674,7 +698,7 @@ local function buildHeader(titleBar)
     )
     styleButton(closeButton, COLORS.surfaceAlt, COLORS.surfaceHover)
 
-    return closeButton
+    return closeButton, minimizeButton
 end
 
 local function buildSearchIcon(parent, position)
@@ -907,7 +931,7 @@ local function buildInterface()
     titleFill.BorderSizePixel = 0
     titleFill.Parent = titleBar
 
-    local closeButton = buildHeader(titleBar)
+    local closeButton, minimizeButton = buildHeader(titleBar)
     buildBody(window)
     updateScale()
 
@@ -979,7 +1003,170 @@ local function buildInterface()
         end)
     end))
 
+    -- minimizing ------------------------------------------------------
+
+    local bodyElements = {}
+    for _, child in ipairs(window:GetChildren()) do
+        if child ~= titleBar then
+            table.insert(bodyElements, child)
+        end
+    end
+
+    local collapsed = false
+    local collapsedSize = UDim2.fromOffset(CONFIG.WINDOW_WIDTH, 44)
+    local expandedSize = UDim2.fromOffset(CONFIG.WINDOW_WIDTH, CONFIG.WINDOW_HEIGHT)
+    local bodyVisibility = {}
+
+    local setCollapsed
+    setCollapsed = function(value)
+        if collapsed == value then
+            return
+        end
+        collapsed = value
+        interfaceCollapsed = value
+
+        if value then
+            bodyVisibility = {}
+            for _, element in ipairs(bodyElements) do
+                pcall(function()
+                    bodyVisibility[element] = element.Visible
+                    element.Visible = false
+                end)
+            end
+        else
+            for _, element in ipairs(bodyElements) do
+                pcall(function()
+                    local wasVisible = bodyVisibility[element]
+                    if wasVisible == nil or wasVisible then
+                        element.Visible = true
+                    end
+                end)
+            end
+            pcall(refreshClearButton)
+        end
+
+        pcall(function()
+            minimizeButton.Text = value and "+" or "–"
+        end)
+
+        pcall(function()
+            TweenService:Create(
+                window,
+                TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Size = value and collapsedSize or expandedSize }
+            ):Play()
+        end)
+    end
+
+    track(minimizeButton.MouseButton1Click:Connect(function()
+        safeCall("minimize button", function()
+            setCollapsed(not collapsed)
+        end)
+    end))
+
     -- lifecycle ------------------------------------------------------
+
+    -- A small floating pill so the interface can be brought back after
+    -- closing it. It is a separate ScreenGui so it stays visible while the
+    -- main interface is disabled.
+    pillGui = Instance.new("ScreenGui")
+    pillGui.Name = "AvatarCopierPillGui"
+    pillGui.IgnoreGuiInset = true
+    pillGui.ResetOnSpawn = false
+    pillGui.DisplayOrder = 9998
+    pillGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pillGui.Enabled = false
+
+    local pillAttached = attachGui(pillGui)
+    if pillAttached then
+        pill = Instance.new("TextButton")
+        pill.Name = "ReopenPill"
+        pill.AnchorPoint = Vector2.new(1, 0)
+        pill.Position = UDim2.new(1, -16, 0, 86)
+        pill.Size = UDim2.fromOffset(44, 44)
+        pill.BackgroundColor3 = CONFIG.ACCENT
+        pill.BorderSizePixel = 0
+        pill.Text = "A"
+        pill.Font = Enum.Font.GothamBlack
+        pill.TextSize = 16
+        pill.TextColor3 = Color3.fromRGB(255, 255, 255)
+        pill.AutoButtonColor = false
+        pill.Active = true
+        pill.Parent = pillGui
+        makeCorner(pill, 22)
+        makeStroke(pill, Color3.fromRGB(255, 255, 255), 1.5)
+
+        local pillDragging = false
+        local pillDragMoved = false
+        local pillDragStart
+        local pillStartX
+        local pillStartY
+
+        track(pill.InputBegan:Connect(function(input)
+            safeCall("pill drag start", function()
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    pillDragging = true
+                    pillDragMoved = false
+                    pillDragStart = input.Position
+                    pillStartX = pill.Position.X.Offset
+                    pillStartY = pill.Position.Y.Offset
+                end
+            end)
+        end))
+
+        track(UserInputService.InputChanged:Connect(function(input)
+            safeCall("pill drag move", function()
+                if not pillDragging or not pillDragStart then
+                    return
+                end
+                if input.UserInputType ~= Enum.UserInputType.MouseMovement
+                    and input.UserInputType ~= Enum.UserInputType.Touch then
+                    return
+                end
+
+                local delta = input.Position - pillDragStart
+                if math.abs(delta.X) + math.abs(delta.Y) > 4 then
+                    pillDragMoved = true
+                end
+                pill.Position = UDim2.new(
+                    1,
+                    pillStartX + delta.X,
+                    0,
+                    pillStartY + delta.Y
+                )
+            end)
+        end))
+
+        track(UserInputService.InputEnded:Connect(function(input)
+            safeCall("pill drag end", function()
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    pillDragging = false
+                end
+            end)
+        end))
+
+        track(pill.MouseButton1Click:Connect(function()
+            safeCall("reopen pill", function()
+                if pillDragMoved then
+                    pillDragMoved = false
+                    return
+                end
+                if screenGui then
+                    screenGui.Enabled = true
+                end
+                if pillGui then
+                    pillGui.Enabled = false
+                end
+            end)
+        end))
+    else
+        pcall(function()
+            pillGui:Destroy()
+        end)
+        pillGui = nil
+    end
 
     local function destroy()
         if destroyed then
@@ -994,6 +1181,9 @@ local function buildInterface()
         end
         if screenGui then
             screenGui:Destroy()
+        end
+        if pillGui then
+            pillGui:Destroy()
         end
 
         if type(getgenv) == "function" then
@@ -1010,7 +1200,16 @@ local function buildInterface()
     end
 
     track(closeButton.MouseButton1Click:Connect(function()
-        safeCall("close button", destroy)
+        safeCall("close button", function()
+            -- Closing hides the interface but keeps the avatar preview:
+            -- the floating pill brings it back.
+            if screenGui then
+                screenGui.Enabled = false
+            end
+            if pillGui then
+                pillGui.Enabled = true
+            end
+        end)
     end))
 
     return destroy
@@ -1486,7 +1685,13 @@ local function sanitizeOverlay(model)
             or descendant:IsA("ClickDetector")
             or descendant:IsA("ProximityPrompt")
             or descendant:IsA("BillboardGui")
-            or descendant:IsA("BodyMover") then
+            or descendant:IsA("BodyMover")
+            or descendant:IsA("AlignPosition")
+            or descendant:IsA("AlignOrientation")
+            or descendant:IsA("LinearVelocity")
+            or descendant:IsA("VectorForce")
+            or descendant:IsA("Torque")
+            or descendant:IsA("AngularVelocity") then
             pcall(function()
                 descendant:Destroy()
             end)
@@ -1527,13 +1732,39 @@ local function sanitizeOverlay(model)
         pcall(function()
             humanoid.PlatformStand = true
         end)
+        pcall(function()
+            humanoid.EvaluateStateMachine = false
+        end)
+        pcall(function()
+            local disabledStates = {
+                "FallingDown",
+                "Ragdoll",
+                "Jumping",
+                "Freefall",
+                "Climbing",
+                "Seated",
+                "Landed",
+                "Running",
+                "RunningNoPhysics",
+                "StrafingNoPhysics",
+                "Swimming",
+                "GettingUp",
+                "PlatformStand",
+            }
+            for _, stateName in ipairs(disabledStates) do
+                local state = Enum.HumanoidStateType[stateName]
+                if state then
+                    humanoid:SetStateEnabled(state, false)
+                end
+            end
+        end)
     end
 
     local root = model:FindFirstChild("HumanoidRootPart")
     if root then
         model.PrimaryPart = root
         pcall(function()
-            root.Anchored = false
+            root.Anchored = true
         end)
     end
 
@@ -1706,20 +1937,30 @@ local function attachOverlay(model, localHumanoid, localCharacter)
     end)
     overlayRoot.CFrame = sourceRoot.CFrame
 
-    local weld = Instance.new("WeldConstraint")
-    weld.Name = "AvatarCopierWeld"
-    weld.Part0 = sourceRoot
-    weld.Part1 = overlayRoot
-    weld.Parent = overlayRoot
-
     overlay = model
-    overlayWeld = weld
+    overlayWeld = nil
     hideLocalCharacter(localCharacter)
     buildPoseMap(localCharacter)
 
+    -- The preview root is anchored and follows the real character every
+    -- frame. Nothing is physically welded to the live rig, so the preview
+    -- cannot inject impulses into the local Humanoid (this caused unwanted
+    -- auto-jumping while walking on mobile).
+    local followPose = function()
+        if sourceRoot.CFrame then
+            pcall(function()
+                model:PivotTo(sourceRoot.CFrame)
+            end)
+            if overlayRoot.Parent then
+                overlayRoot.CFrame = sourceRoot.CFrame
+            end
+        end
+        mirrorPose()
+    end
+
     local connection
     connection = RunService.RenderStepped:Connect(function()
-        local ok = pcall(mirrorPose)
+        local ok = pcall(followPose)
         if not ok then
             pcall(function()
                 connection:Disconnect()

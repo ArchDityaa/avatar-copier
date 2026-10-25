@@ -52,7 +52,7 @@ print("== avatar copier headless tests ==")
 
 local api = getgenv().AvatarCopier
 check(api ~= nil, "API is exposed through getgenv()")
-equal(api and api.version, "1.3.0", "version is 1.3.0")
+equal(api and api.version, "1.4.0", "version is 1.4.0")
 
 local expectedParent = IS_MOBILE and PlayerGui or hiddenContainer
 local gui = expectedParent:FindFirstChild("AvatarCopierGui")
@@ -120,6 +120,34 @@ if input and inputStroke then
     equal(inputStroke.Color, COLORS.stroke, "input focus ring resets on blur")
 end
 
+-- Minimize collapses the window to its title bar without touching state.
+local minimizeButton = titleBar and titleBar:FindFirstChild("Minimize")
+check(minimizeButton ~= nil, "minimize button exists")
+
+if minimizeButton and input then
+    minimizeButton.MouseButton1Click:Fire()
+    equal(window.Size.Y.Offset, 44, "minimize collapses the window to the title bar")
+    equal(input.Visible, false, "minimize hides the input row")
+    equal(minimizeButton.Text, "+", "minimize swaps its glyph while collapsed")
+
+    input.Text = "abc"
+    input.Changed:Fire("Text")
+    local clearButtonWhileCollapsed = window and window:FindFirstChild("Clear")
+    if clearButtonWhileCollapsed then
+        equal(clearButtonWhileCollapsed.Visible, false, "clear stays hidden while collapsed")
+    end
+
+    minimizeButton.MouseButton1Click:Fire()
+    equal(window.Size.Y.Offset, 272, "minimize restores the window height")
+    equal(input.Visible, true, "minimize keeps the body visible after restore")
+    check(clearButtonWhileCollapsed and clearButtonWhileCollapsed.Visible == true,
+        "restore re-evaluates the clear button for typed text")
+end
+
+if minimizeButton and copyButton then
+    equal(copyButton.Visible, true, "restore keeps the copy button visible")
+end
+
 local localRoot = character:FindFirstChild("HumanoidRootPart")
 local localFace = character:FindFirstChild("Head"):FindFirstChild("Face")
 local sourceNeck = character:FindFirstChild("Torso"):FindFirstChild("Neck")
@@ -132,7 +160,6 @@ if input and copyButton and statusLabel and statusDot and statusCard then
     local preview = findPreview()
     local previewRoot = preview and preview:FindFirstChild("HumanoidRootPart")
     local previewHumanoid = preview and preview:FindFirstChildOfClass("Humanoid")
-    local weld = previewRoot and previewRoot:FindFirstChild("AvatarCopierWeld")
 
     check(preview ~= nil, "copy creates an AvatarCopierPreview overlay")
     equal(preview and preview.Parent, overlayFolder(), "overlay is parented to the overlay folder")
@@ -140,9 +167,12 @@ if input and copyButton and statusLabel and statusDot and statusCard then
     equal(humanoid.ApplyCount, nil, "the real LocalPlayer Humanoid is never used for ApplyDescription")
     equal(localRoot.LocalTransparencyModifier, 1, "the real LocalPlayer character is hidden locally")
     equal(localFace.Transparency, 1, "decals on the real character are hidden locally")
-    check(weld ~= nil, "overlay is welded to the real character")
-    equal(weld and weld.Part0, localRoot, "weld Part0 is the real HumanoidRootPart")
-    equal(weld and weld.Part1, previewRoot, "weld Part1 is the overlay HumanoidRootPart")
+    check(previewRoot and previewRoot:FindFirstChild("AvatarCopierWeld") == nil,
+        "no weld couples the preview to the real character")
+    equal(previewRoot and previewRoot.Anchored, true, "preview root is anchored so it cannot affect physics")
+    equal(preview and preview:FindFirstChild("StickyMover"), nil, "constraint movers are stripped from the preview")
+    equal(previewHumanoid and previewHumanoid.EvaluateStateMachine, false,
+        "preview Humanoid state machine is disabled")
     equal(previewRoot and previewRoot.CanCollide, false, "overlay parts do not collide")
     equal(previewRoot and previewRoot.CanTouch, false, "overlay parts do not receive touches")
     equal(previewRoot and previewRoot.CanQuery, false, "overlay parts are excluded from raycasts")
@@ -307,7 +337,7 @@ if input and copyButton and statusLabel and statusDot then
     copyButton.MouseButton1Click:Fire()
 
     local clipboard = ENV.__clipboard or ""
-    contains(clipboard, "Avatar Copier v1.3.0 - error report", "build failure clipboard uses the current version")
+    contains(clipboard, "Avatar Copier v1.4.0 - error report", "build failure clipboard uses the current version")
     contains(clipboard, "Context: copy/build", "build failure clipboard includes the context")
     contains(clipboard, "Target: TestUser", "build failure clipboard includes the target")
     contains(clipboard, "Resolved user ID: 12345", "build failure clipboard includes the resolved ID")
@@ -368,6 +398,36 @@ if input and copyButton and statusLabel then
     contains(statusLabel.Text, "Character respawned", "CharacterAdded asks the user to copy again")
 end
 
+-- Closing the interface hides it but keeps the avatar preview alive;
+-- the floating pill brings the GUI back.
+if input and copyButton and statusLabel then
+    advanceClock(2)
+    input.Text = "ServerFriend"
+    copyButton.MouseButton1Click:Fire()
+    check(findPreview() ~= nil, "preview active before close")
+
+    local closeButton = titleBar and titleBar:FindFirstChild("Close")
+    check(closeButton ~= nil, "close button exists")
+    closeButton.MouseButton1Click:Fire()
+
+    equal(gui.Enabled, false, "close hides the interface instead of destroying it")
+    check(findPreview() ~= nil, "close keeps the avatar preview")
+    equal(api.isPreviewing(), true, "close keeps the preview API state")
+
+    local pillGui = expectedParent:FindFirstChild("AvatarCopierPillGui")
+    check(pillGui ~= nil, "close reveals the floating pill gui")
+    equal(pillGui and pillGui.Enabled, true, "floating pill is enabled after close")
+    local reopenPill = pillGui and pillGui:FindFirstChild("ReopenPill")
+    check(reopenPill ~= nil, "floating pill button exists")
+
+    if reopenPill then
+        reopenPill.MouseButton1Click:Fire()
+        equal(gui.Enabled, true, "floating pill brings the interface back")
+        equal(pillGui.Enabled, false, "floating pill hides after reopening")
+        equal(findPreview() ~= nil, true, "preview survives hide and restore")
+    end
+end
+
 -- Destroy must remove the overlay, restore the character, and clear globals.
 if api and gui then
     advanceClock(2)
@@ -377,8 +437,10 @@ if api and gui then
         check(findPreview() ~= nil, "preview exists immediately before destroy")
     end
 
+    local pillGui = expectedParent:FindFirstChild("AvatarCopierPillGui")
     api.destroy()
     equal(gui.Parent, nil, "destroy detaches the ScreenGui")
+    check(pillGui == nil or pillGui.Parent == nil, "destroy removes the floating pill")
     equal(getgenv().AvatarCopier, nil, "destroy clears the global API")
     equal(getgenv().AvatarCopierCleanup, nil, "destroy clears the re-execution cleanup hook")
     equal(findPreview(), nil, "destroy removes the preview model")

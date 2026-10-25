@@ -38,7 +38,7 @@
   <text x="250" y="130" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#f4f4f5">Avatar Copier</text>
 
   <rect x="416" y="116" width="54" height="20" rx="6" fill="#2a2a32"/>
-  <text x="443" y="130" text-anchor="middle" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" fill="#a1a1aa">v1.3.0</text>
+  <text x="443" y="130" text-anchor="middle" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="10" fill="#a1a1aa">v1.4.0</text>
 
   <rect x="478" y="110" width="32" height="32" rx="9" fill="#2a2a32"/>
   <text x="494" y="132" text-anchor="middle" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#a1a1aa">×</text>

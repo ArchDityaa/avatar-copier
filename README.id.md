@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Versi](https://img.shields.io/badge/version-1.3.0-6366f1)
+![Versi](https://img.shields.io/badge/version-1.4.0-6366f1)
 ![Test](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![Lisensi](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -27,7 +27,8 @@ Roblox tidak mereplikasi model buatan client, jadi **hanya Anda yang melihat pra
 | Copy lewat user ID | Contoh: `1` |
 | Copy lewat URL profil | Contoh: `https://www.roblox.com/users/1/profile` |
 | Fast path dalam server | Meng-clone karakter live target jika ia ada di server yang sama untuk hasil paling akurat |
-| Pratinjau overlay lokal | Rig pratinjau di-weld ke karakter Anda, mengikuti posisi dan mirror pose |
+| Pratinjau overlay lokal | Rig pratinjau ber-anchored mengikuti posisi Anda (tanpa weld, tanpa gangguan fisika) dan menyalin pose |
+| Kontrol window | Minimize mengecil ke title bar; close menyembunyikan GUI sementara pratinjau tetap aktif, pill melayang membukanya kembali |
 | Beberapa fallback build | API description → API user ID → clone rig lokal → salin sebagian penampilan |
 | Tombol Reset | Menghapus overlay dan menampilkan kembali karakter asli |
 | Clear input | Satu ketukan untuk memulai ulang |
@@ -109,7 +110,7 @@ AvatarCopier.copy("Roblox")    -- copy lewat username / ID / URL
 AvatarCopier.copy(1)           -- user ID numerik
 AvatarCopier.reset()           -- hapus pratinjau
 AvatarCopier.destroy()         -- tutup jendela
-print(AvatarCopier.version)    -- "1.3.0"
+print(AvatarCopier.version)    -- "1.4.0"
 print(AvatarCopier.isPreviewing())
 print(AvatarCopier.getTarget())
 ```
@@ -121,7 +122,7 @@ print(AvatarCopier.getTarget())
 | `AvatarCopier.destroy()` | Menghapus GUI dan overlay, lalu membersihkan API global. |
 | `AvatarCopier.isPreviewing()` | Mengembalikan `true` saat overlay pratinjau aktif. |
 | `AvatarCopier.getTarget()` | Mengembalikan `{ name, userId, source }` untuk pratinjau aktif, atau `nil`. |
-| `AvatarCopier.version` | String versi saat ini (`"1.3.0"`). |
+| `AvatarCopier.version` | String versi saat ini (`"1.4.0"`). |
 
 `copy` dan `reset` bersifat fire-and-forget: keduanya menjalankan task lalu langsung kembali. Baca status card untuk hasilnya.
 
@@ -130,7 +131,7 @@ print(AvatarCopier.getTarget())
 Jika terjadi error Luau tak terduga — saat startup, di handler tombol, pipeline copy/reset, atau pemanggilan API — Avatar Copier menangkapnya dan menyusun laporan ringkas:
 
 ```text
-Avatar Copier v1.3.0 - error report
+Avatar Copier v1.4.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy button
 Error: <pesan error>
@@ -141,7 +142,7 @@ Traceback:
 Kegagalan yang ditangani juga menghasilkan laporan. Jika semua metode build pratinjau gagal, laporan memuat target, user ID hasil resolve, sumber avatar, setiap metode yang dicoba, dan error-nya:
 
 ```text
-Avatar Copier v1.3.0 - error report
+Avatar Copier v1.4.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy/build
 Target: Roblox
@@ -189,11 +190,13 @@ flowchart TD
    - Terakhir: clone rig Anda dan salin warna tubuh, skala, pakaian, serta wajah secara langsung, ditandai sebagai pratinjau sebagian.
    - Engine hanya mengizinkan `ApplyDescription` di client untuk Humanoid yang dibuat client tersebut, jadi Humanoid karakter asli tidak pernah dipakai.
 3. **Attach dan ikuti**
-   - Model disanitasi (tanpa script, collision, touch, atau raycast), di-parent ke `workspace.AvatarCopierOverlay`, dan di-weld ke `HumanoidRootPart` Anda.
-   - Setiap `RenderStepped`, sendi `Motor6D` yang cocok menyalin pose Anda saat ini.
+   - Model disanitasi (tanpa script, collision, touch, constraint mover, atau raycast), dan di-parent ke `workspace.AvatarCopierOverlay`.
+   - Root part-nya **di-anchored**: tidak ada weld ke rig Anda, jadi pratinjau tidak mungkin menyuntikkan impuls ke Humanoid Anda (tidak ada lompat otomatis saat berjalan).
+   - Setiap `RenderStepped`, root yang di-anchored mengikuti `HumanoidRootPart` Anda dan sendi `Motor6D` yang cocok menyalin pose saat ini.
    - Karakter asli disembunyikan secara lokal dengan `LocalTransparencyModifier` dan properti client-only terkait. `Transparency` yang direplikasi tidak diubah.
 4. **Kembalikan**
-   - **Reset** memutus mirror pose, menghancurkan weld dan overlay, lalu mengembalikan semua properti yang disembunyikan. Karakter asli tidak pernah diubah di server.
+   - **Reset** menghentikan loop follow, menghancurkan overlay, dan mengembalikan semua properti yang disembunyikan. Karakter asli tidak pernah diubah di server.
+   - **Close** (`×`) hanya menyembunyikan window — pratinjau tetap aktif. Pill melayang kecil membuka kembali; **Minimize** mengecilkan window menjadi title bar-nya. Teardown penuh tetap tersedia dari Reset dan `AvatarCopier.destroy()`.
 
 `Players`, `RunService`, `UserInputService`, `TweenService`, dan `CoreGui` adalah satu-satunya service yang dipakai. Tidak ada HTTP ke layanan pihak ketiga, tidak ada webhook, dan tidak ada pengumpulan data.
 
@@ -282,7 +285,7 @@ Script diuji secara headless dengan tooling open source — tanpa perlu client R
 - focus ring input berubah ke warna accent dan kembali saat blur,
 - `UIScale` responsif tetap dalam batas,
 - jalur clone dalam server dan jalur API username,
-- overlay lokal dibuat, di-weld, disanitasi, dan status karakter tersembunyi dipulihkan,
+- overlay lokal dibuat, di-anchored, diikuti tiap frame, disanitasi, dan status karakter tersembunyi dipulihkan,
 - Humanoid LocalPlayer asli tidak pernah diberikan ke `ApplyDescription`,
 - mirror pose melalui `Motor6D.Transform`,
 - rantai fallback description/API serta clone lokal/sebagian,
@@ -292,7 +295,7 @@ Script diuji secara headless dengan tooling open source — tanpa perlu client R
 - cooldown, user tidak dikenal, input kosong, reset, cleanup respawn, dan cleanup destroy,
 - tidak ada warning pada jalur pratinjau sukses dan validasi.
 
-Suite saat ini menjalankan `119` check per profil (mobile dan desktop).
+Suite saat ini menjalankan `141` check per profil (mobile dan desktop).
 
 Suite dijalankan dua kali, dengan profil mobile dan desktop. CI menjalankan script yang sama pada setiap push.
 

@@ -4,6 +4,42 @@ All notable changes to Avatar Copier are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.4.0 — 2026-10-25
+
+### Fixed
+
+- Walking with the mobile analog while an avatar preview was active no longer
+  makes the character auto-jump. The preview previously shared a physics
+  assembly with the real rig through a `WeldConstraint`, and the preview
+  Humanoid still ran its state machine with leftover constraint movers — the
+  combined assembly could inject impulses into the local Humanoid while moving.
+- The preview root is now `Anchored` and follows the real character every
+  `RenderStepped`; nothing is welded to the live rig anymore.
+- The preview Humanoid state machine is fully disabled
+  (`EvaluateStateMachine = false` plus `SetStateEnabled(false)` for every
+  state), and sanitization now also strips constraint-based movers
+  (`AlignPosition`, `AlignOrientation`, `LinearVelocity`, `VectorForce`,
+  `Torque`, `AngularVelocity`) from the preview.
+
+### Added
+
+- **Minimize** button in the title bar: the window collapses to just the title
+  bar (still draggable) and restores with one tap. Visibility of controls like
+  the input clear button is remembered while collapsed.
+- **Floating pill**: the close button (`×`) now only hides the interface while
+  the avatar preview stays active. A small draggable "A" pill lets you bring
+  the interface back. Full teardown (including the preview) is available from
+  **Reset**, `AvatarCopier.destroy()`, and the re-execution cleanup hook.
+
+### Changed
+
+- Version bumped to `1.4.0`.
+- Headless tests grew from `119` to `141` checks per profile (mobile and
+  desktop), covering the anchored follow behavior, state machine shutdown,
+  constraint-mover stripping, minimize collapse/restore, and close/pill
+  lifecycle.
+- READMEs updated to describe the new window controls and fault-free follow.
+
 ## 1.3.0 — 2026-10-25
 
 ### Fixed

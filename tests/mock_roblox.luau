@@ -578,6 +578,11 @@ serverPlayer.Parent = Players
 local serverCharacter = makeRig("ServerFriend", serverDescription, true)
 serverPlayer.Character = serverCharacter
 
+-- A leftover constraint mover on the server rig must not survive sanitizing.
+local serverMover = newInstance("LinearVelocity")
+serverMover.Name = "StickyMover"
+serverMover.Parent = serverCharacter
+
 Players.GetPlayers = function()
     return { LocalPlayer, serverPlayer }
 end

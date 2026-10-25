@@ -4,7 +4,7 @@
 
 [English](README.md) · [Bahasa Indonesia](README.id.md)
 
-![Version](https://img.shields.io/badge/version-1.3.0-6366f1)
+![Version](https://img.shields.io/badge/version-1.4.0-6366f1)
 ![Tests](https://github.com/ArchDityaa/avatar-copier/actions/workflows/test.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Client-side](https://img.shields.io/badge/Roblox-client--side-6366f1)
@@ -27,7 +27,8 @@ Roblox does not replicate client-created models, so **only you see the preview**
 | Copy by user ID | e.g. `1` |
 | Copy by profile URL | e.g. `https://www.roblox.com/users/1/profile` |
 | In-server fast path | Clones the target's live character when they are in the same server for the highest fidelity |
-| Local overlay preview | Weld-mounted preview rig follows your position and mirrors your joint poses |
+| Local overlay preview | Anchored preview rig follows your position (no welding, no physics interference) and mirrors your joint poses |
+| Window controls | Minimize collapses to the title bar; close hides the GUI while the preview stays, a floating pill reopens it |
 | Multiple build fallbacks | Description API → user-ID API → local-rig clone → partial appearance copy |
 | Reset button | Removes the overlay and reveals your real character again |
 | Clear input | One tap to start over |
@@ -109,7 +110,7 @@ AvatarCopier.copy("Roblox")    -- copy by username / ID / URL
 AvatarCopier.copy(1)           -- numeric user ID
 AvatarCopier.reset()           -- remove the preview
 AvatarCopier.destroy()         -- close the window
-print(AvatarCopier.version)    -- "1.3.0"
+print(AvatarCopier.version)    -- "1.4.0"
 print(AvatarCopier.isPreviewing())
 print(AvatarCopier.getTarget())
 ```
@@ -121,7 +122,7 @@ print(AvatarCopier.getTarget())
 | `AvatarCopier.destroy()` | Removes the GUI and overlay, then clears the global API. |
 | `AvatarCopier.isPreviewing()` | Returns `true` while a preview overlay is active. |
 | `AvatarCopier.getTarget()` | Returns `{ name, userId, source }` for the active preview, or `nil`. |
-| `AvatarCopier.version` | Current version string (`"1.3.0"`). |
+| `AvatarCopier.version` | Current version string (`"1.4.0"`). |
 
 `copy` and `reset` are fire-and-forget: they spawn a task and return immediately. Read the status card for the result.
 
@@ -130,7 +131,7 @@ print(AvatarCopier.getTarget())
 If an unexpected Luau error happens — during startup, a button handler, the copy/reset pipeline, or an API call — Avatar Copier catches it and builds a compact report:
 
 ```text
-Avatar Copier v1.3.0 - error report
+Avatar Copier v1.4.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy button
 Error: <error message>
@@ -141,7 +142,7 @@ Traceback:
 Handled failures also produce a report. If every preview-build method fails, the report includes the target, resolved user ID, avatar source, each attempted method, and its error:
 
 ```text
-Avatar Copier v1.3.0 - error report
+Avatar Copier v1.4.0 - error report
 Time: 2026-10-25 12:34:56 UTC
 Context: copy/build
 Target: Roblox
@@ -189,11 +190,13 @@ flowchart TD
    - Last: clone your rig and copy body colours, scale, clothing, and face directly, labelled as a partial preview.
    - The engine only allows `ApplyDescription` on the client for Humanoids created by that client, so the real character's Humanoid is never used.
 3. **Attach and follow**
-   - The model is sanitized (no scripts, collisions, touches, or raycast hits), parented under `workspace.AvatarCopierOverlay`, and welded to your `HumanoidRootPart`.
-   - Every `RenderStepped`, matching `Motor6D` joints copy your current pose.
+   - The model is sanitized (no scripts, collisions, touches, constraint movers, or raycast hits) and parented under `workspace.AvatarCopierOverlay`.
+   - Its root part is **anchored**: nothing is welded to your rig, so the preview can never inject impulses into your Humanoid (no auto-jumping while walking).
+   - Every `RenderStepped`, the anchored root follows your `HumanoidRootPart` and matching `Motor6D` joints copy your current pose.
    - Your real character is hidden locally with `LocalTransparencyModifier` and related client-only properties. Replicated `Transparency` is not changed.
 4. **Restore**
-   - **Reset** disconnects the pose mirror, destroys the weld and overlay, and restores every hidden property. Your real character was never modified on the server.
+   - **Reset** stops the follow loop, destroys the overlay, and restores every hidden property. Your real character was never modified on the server.
+   - **Close** (`×`) only hides the window — the preview stays active. A small floating pill reopens it; **Minimize** collapses the window to its title bar. Full teardown remains available from Reset and `AvatarCopier.destroy()`.
 
 `Players`, `RunService`, `UserInputService`, `TweenService`, and `CoreGui` are the only services used. There is no HTTP call to any third-party service, no webhook, and no data collection.
 
@@ -282,7 +285,7 @@ The script is tested headlessly with open-source tooling — no Roblox client re
 - the input focus ring switches to the accent colour and resets on blur,
 - responsive `UIScale` stays within its bounds,
 - the in-server clone path and the username API path,
-- the local overlay is created, welded, sanitized, hidden-character state is restored,
+- the local overlay is created, anchored, follow-driven, sanitized, and hidden-character state is restored,
 - the real LocalPlayer Humanoid is never passed to `ApplyDescription`,
 - pose mirroring through `Motor6D.Transform`,
 - description/API and local-clone/partial fallback chains,
@@ -292,7 +295,7 @@ The script is tested headlessly with open-source tooling — no Roblox client re
 - cooldown, unknown user, empty input, reset, respawn cleanup, and destroy cleanup,
 - no warnings on the successful-preview and validation paths.
 
-The suite currently runs `119` checks per profile (mobile and desktop).
+The suite currently runs `141` checks per profile (mobile and desktop).
 
 The suite runs twice, with a mobile and a desktop profile. CI runs the same script on every push.
 
